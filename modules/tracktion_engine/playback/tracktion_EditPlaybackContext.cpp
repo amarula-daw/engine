@@ -487,7 +487,8 @@ private:
 
 //==============================================================================
 EditPlaybackContext::ScopedDeviceListReleaser::ScopedDeviceListReleaser (EditPlaybackContext& e, bool reallocate)
-    : owner (e), shouldReallocate (reallocate)
+    : owner (e), shouldReallocate (reallocate),
+      wasPlaying ((e.isPlaying() || e.isPlayPending()) && ! e.transport.isRecording())
 {
     // Do this here to avoid creating the audio nodes upon reallocation causing a deadlock upon plugin initialisation
     if (reallocate)
@@ -498,8 +499,16 @@ EditPlaybackContext::ScopedDeviceListReleaser::ScopedDeviceListReleaser (EditPla
 
 EditPlaybackContext::ScopedDeviceListReleaser::~ScopedDeviceListReleaser()
 {
-    if (shouldReallocate)
-        owner.rebuildDeviceList();
+    if (! shouldReallocate)
+        return;
+
+    owner.rebuildDeviceList();
+
+    // Releasing the devices stopped the play head; otherwise the transport would stop
+    // when it noticed, e.g. when the audio device restarts mid-playback. (Recordings
+    // were discarded, so a transport that was recording stops.)
+    if (wasPlaying)
+        owner.postPlay();
 }
 
 //==============================================================================

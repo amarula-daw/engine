@@ -292,6 +292,7 @@ private:
 
     std::shared_mutex contextLock;
     juce::Array<EditPlaybackContext*> activeContexts;
+    juce::Array<EditPlaybackContext*> contextsToResume; // playing when their devices were cleared
     std::unique_ptr<juce::AudioProcessor> globalOutputAudioProcessor;
     juce::HeapBlock<const float*> inputChannelsScratch;
     juce::HeapBlock<float*> outputChannelsScratch;

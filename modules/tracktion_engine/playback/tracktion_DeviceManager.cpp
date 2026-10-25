@@ -1586,6 +1586,7 @@ void DeviceManager::removeContext (EditPlaybackContext* c)
 {
     const std::unique_lock sl (contextLock);
     activeContexts.removeAllInstancesOf (c);
+    contextsToResume.removeAllInstancesOf (c);
 }
 
 void DeviceManager::clearAllContextDevices()
@@ -1593,7 +1594,14 @@ void DeviceManager::clearAllContextDevices()
     const std::shared_lock sl (contextLock);
 
     for (auto c : activeContexts)
+    {
+        // Releasing the devices stops the play head (and discards recordings); playback
+        // carries on once they're reloaded
+        if ((c->isPlaying() || c->isPlayPending()) && ! c->transport.isRecording())
+            contextsToResume.addIfNotAlreadyThere (c);
+
         const EditPlaybackContext::ScopedDeviceListReleaser rebuilder (*c, false);
+    }
 }
 
 void DeviceManager::reloadAllContextDevices()
@@ -1602,9 +1610,16 @@ void DeviceManager::reloadAllContextDevices()
 
     for (auto c : activeContexts)
     {
-        const EditPlaybackContext::ScopedDeviceListReleaser rebuilder (*c, true);
-        c->edit.restartPlayback();
+        {
+            const EditPlaybackContext::ScopedDeviceListReleaser rebuilder (*c, true);
+            c->edit.restartPlayback();
+        }
+
+        if (contextsToResume.contains (c))
+            c->postPlay();
     }
+
+    contextsToResume.clear();
 }
 
 void DeviceManager::setGlobalOutputAudioProcessor (std::unique_ptr<juce::AudioProcessor> newProcessor)

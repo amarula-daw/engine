@@ -64,7 +64,9 @@ public:
     LevelMeasurer masterLevels;
     MidiNoteDispatcher midiDispatcher;
 
-    /** Releases and then optionally reallocates the context's device list safely. */
+    /** Releases and then optionally reallocates the context's device list safely.
+        When it's reallocated, a context that was playing carries on.
+    */
     struct ScopedDeviceListReleaser
     {
         ScopedDeviceListReleaser (EditPlaybackContext&, bool reallocate);
@@ -72,6 +74,7 @@ public:
 
         EditPlaybackContext& owner;
         const bool shouldReallocate;
+        const bool wasPlaying;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ScopedDeviceListReleaser)
     };
