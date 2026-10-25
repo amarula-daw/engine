@@ -803,6 +803,10 @@ juce::Array<Clip*> deleteRegion (Clip& c, TimeRange range)
     else
     {
         c.trimAwayOverlap (range);
+
+        // A range ending a rounding error inside the clip would otherwise leave a sliver of it behind
+        if (c.getPosition().getLength() < Clip::minimumLength)
+            c.removeFromParent();
     }
 
     return newClips;
@@ -832,6 +836,10 @@ Clip* split (Clip& clip, const TimePosition time)
     auto parent = clip.getParent();
 
     if (parent == nullptr)
+        return {};
+
+    // A slot holds one clip, so inserting the second half would evict the first
+    if (clip.getClipSlot() != nullptr)
         return {};
 
     auto& edit = clip.edit;
