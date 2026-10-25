@@ -1591,6 +1591,7 @@ void DeviceManager::removeContext (EditPlaybackContext* c)
 
 void DeviceManager::clearAllContextDevices()
 {
+    TRACKTION_ASSERT_MESSAGE_THREAD // contextsToResume is only used on the message thread
     const std::shared_lock sl (contextLock);
 
     for (auto c : activeContexts)

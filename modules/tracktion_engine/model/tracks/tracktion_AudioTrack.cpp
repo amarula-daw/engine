@@ -1084,6 +1084,9 @@ AudioTrack::FreezePointRemovalInhibitor::~FreezePointRemovalInhibitor()         
 
 juce::Result AudioTrack::setFrozenFromRender (const juce::File& render)
 {
+    if (frozenIndividually)
+        return juce::Result::fail (TRANS("\"XTRKX\" is already frozen").replace ("XTRKX", getName()));
+
     const juce::ScopedValueSetter<juce::File> svs (renderToFreezeFrom, render);
     return setFrozen (true, individualFreeze);
 }
@@ -1105,9 +1108,8 @@ void AudioTrack::freezeTrack()
     auto freezeFile = getFreezeFile();
     freezeFile.deleteFile();
 
-    if (renderToFreezeFrom != juce::File())
-        renderToFreezeFrom.moveFileTo (freezeFile);
-    else
+    // Rendered again if the given render can't be moved into place
+    if (renderToFreezeFrom == juce::File() || ! renderToFreezeFrom.moveFileTo (freezeFile))
         renderFreeze (freezeFile);
 
     freezePlugins (juce::Range<int> (0, getIndexOfFreezePoint()));

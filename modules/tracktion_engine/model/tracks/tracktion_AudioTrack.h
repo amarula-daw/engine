@@ -110,7 +110,8 @@ public:
     void freezeTrackAsync() const;
 
     /** Freezes the track individually from a render made elsewhere (e.g. in the background,
-        from a copy of the Edit) instead of rendering it again. The render is moved into place.
+        from a copy of the Edit) instead of rendering it again. The render is moved into place
+        (if it can't be, the track is rendered as usual). Fails if it's already frozen.
     */
     [[nodiscard]] juce::Result setFrozenFromRender (const juce::File& render);
 
