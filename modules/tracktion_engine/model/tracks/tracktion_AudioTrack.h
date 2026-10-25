@@ -105,6 +105,16 @@ public:
     void removeFreezePoint();
     void freezeTrackAsync() const;
 
+    /** Freezes the track individually from a render made elsewhere (e.g. in the background,
+        from a copy of the Edit) instead of rendering it again. The render is moved into place.
+    */
+    [[nodiscard]] juce::Result setFrozenFromRender (const juce::File& render);
+
+    /** Returns the index of the track's Freeze Point, or where one would go when the track is
+        frozen: the plugins from there on aren't rendered into its freeze.
+    */
+    int getFreezePointIndex();
+
     /** Returns the other tracks fed by the plugins before this track's Freeze Point, through a
         shared Rack or an aux send. Freezing bypasses those plugins, which would break those
         connections, so the track can't be frozen individually.
@@ -232,6 +242,7 @@ private:
     juce::CachedValue<bool> frozen, frozenIndividually;
 
     int freezePointRemovalInhibitor = 0;
+    juce::File renderToFreezeFrom;
     juce::CachedValue<int> maxInputs, compGroup;
 
     juce::CachedValue<juce::String> ghostTracks;
@@ -254,6 +265,7 @@ private:
 
     //==============================================================================
     void freezeTrack();
+    void renderFreeze (const juce::File&);
     bool insertFreezePointIfRequired();
     int getIndexOfDefaultFreezePoint();
     int getIndexOfFreezePoint();

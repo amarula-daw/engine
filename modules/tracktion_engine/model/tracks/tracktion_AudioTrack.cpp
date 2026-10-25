@@ -1080,9 +1080,48 @@ bool AudioTrack::canContainPlugin (Plugin* p) const
 AudioTrack::FreezePointRemovalInhibitor::FreezePointRemovalInhibitor (AudioTrack& at) : track (at)  { ++track.freezePointRemovalInhibitor; }
 AudioTrack::FreezePointRemovalInhibitor::~FreezePointRemovalInhibitor()                             { --track.freezePointRemovalInhibitor; }
 
+juce::Result AudioTrack::setFrozenFromRender (const juce::File& render)
+{
+    const juce::ScopedValueSetter<juce::File> svs (renderToFreezeFrom, render);
+    return setFrozen (true, individualFreeze);
+}
+
+int AudioTrack::getFreezePointIndex()
+{
+    if (auto index = getIndexOfFreezePoint(); index >= 0)
+        return index;
+
+    if (auto index = getIndexOfDefaultFreezePoint(); index >= 0)
+        return index;
+
+    return pluginList.size();
+}
+
 void AudioTrack::freezeTrack()
 {
     insertFreezePointIfRequired();
+    auto freezeFile = getFreezeFile();
+    freezeFile.deleteFile();
+
+    if (renderToFreezeFrom != juce::File())
+        renderToFreezeFrom.moveFileTo (freezeFile);
+    else
+        renderFreeze (freezeFile);
+
+    freezePlugins (juce::Range<int> (0, getIndexOfFreezePoint()));
+
+    // setFrozen reports this as a failure
+    if (! freezeFile.existsAsFile())
+    {
+        unfreeze (individualFreeze);
+        return;
+    }
+
+    changed();
+}
+
+void AudioTrack::renderFreeze (const juce::File& freezeFile)
+{
     const FreezePointPlugin::ScopedPluginDisabler spd (*this, juce::Range<int> (getIndexOfFreezePoint(),
                                                                                 pluginList.size()));
 
@@ -1094,8 +1133,6 @@ void AudioTrack::freezeTrack()
 
     juce::BigInteger trackNum;
     trackNum.setBit (getIndexInEditTrackList());
-    auto freezeFile = getFreezeFile();
-    freezeFile.deleteFile();
 
     juce::Array<EditItemID> trackIDs { itemID };
     juce::Array<Clip*> clips (getClips());
@@ -1130,29 +1167,12 @@ void AudioTrack::freezeTrack()
     else
         Renderer::renderToFile (desc, r);
 
-    freezePlugins (juce::Range<int> (0, getIndexOfFreezePoint()));
     setMute (shouldBeMuted);
-
-    // setFrozen reports this as a failure
-    if (! r.destFile.existsAsFile())
-    {
-        unfreeze (individualFreeze);
-        return;
-    }
-
-    changed();
 }
 
 juce::Array<Track*> AudioTrack::getTracksFedByFreezablePlugins()
 {
-    // Without a Freeze Point, freezing inserts one at the default position (or the end)
-    auto freezeIndex = getIndexOfFreezePoint();
-
-    if (freezeIndex < 0)
-        freezeIndex = getIndexOfDefaultFreezePoint();
-
-    if (freezeIndex < 0)
-        freezeIndex = pluginList.size();
+    auto freezeIndex = getFreezePointIndex();
 
     juce::Array<Track*> tracks;
 
