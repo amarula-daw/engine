@@ -125,7 +125,16 @@ void WaveAudioClip::setLoopDefaults()
         loopInfo.setDenominator (ts.getTimeSigAt (pos.getStart()).denominator);
 
     if (loopInfo.getNumBeats() == 0.0)
-        loopInfo.setNumBeats (getSourceLength().inSeconds() * (ts.getTempoAt (pos.getStart()).getBpm() / 60.0));
+    {
+        // The playback source may be a proxy which has not been rendered yet, so measure the original.
+        auto bpm = ts.getTempoAt (pos.getStart()).getBpm();
+        auto info = AudioFile (edit.engine, getOriginalFile()).getInfo();
+
+        if (info.sampleRate > 0.0)
+            loopInfo.setBpm (bpm, info);
+        else
+            loopInfo.setNumBeats (getSourceLength().inSeconds() * (bpm / 60.0));
+    }
 }
 
 void WaveAudioClip::reassignReferencedItem (const ReferencedItem& item,
