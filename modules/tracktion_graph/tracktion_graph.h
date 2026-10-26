@@ -77,6 +77,9 @@
 #include <thread>
 #include <optional>
 #include <any>
+#include <mutex>
+#include <typeindex>
+#include <unordered_map>
 
 //==============================================================================
 #if __has_include(<choc/audio/choc_SampleBuffers.h>)

@@ -59,19 +59,18 @@ constexpr juce::Range<int64_t> timeToSample (RangeType timeInSeconds, double sam
 template<typename NodeType, typename Predicate>
 NodeType* findNode (NodeGraph& nodeGraph, Predicate pred)
 {
-    auto found = std::find_if (nodeGraph.sortedNodes.begin(),
-                               nodeGraph.sortedNodes.end(),
-                               [&pred] (auto nodeAndID)
-                               {
-                                   if (auto foundType = dynamic_cast<NodeType*> (nodeAndID.node))
-                                       if (pred (*foundType))
-                                           return true;
+    std::scoped_lock lock (nodeGraph.nodesOfTypeMutex);
+    auto [entry, isNew] = nodeGraph.nodesOfType.try_emplace (std::type_index (typeid (NodeType)));
+    auto& nodesOfType = entry->second;
 
-                                   return false;
-                               });
+    if (isNew)
+        for (auto nodeAndID : nodeGraph.sortedNodes)
+            if (auto foundType = dynamic_cast<NodeType*> (nodeAndID.node))
+                nodesOfType.push_back (foundType);
 
-    if (found != nodeGraph.sortedNodes.end())
-        return dynamic_cast<NodeType*> (found->node);
+    for (auto node : nodesOfType)
+        if (auto foundType = static_cast<NodeType*> (node); pred (*foundType))
+            return foundType;
 
     return nullptr;
 }

@@ -44,6 +44,9 @@ public:
     /// if the track's being routed into another one, this returns it
     AudioTrack* getDestinationTrack() const;
 
+    /// The ID of the track this one's routed into, without looking the track up
+    EditItemID getDestinationTrackID() const        { return destTrackID; }
+
     /// True if this track's direct destination is the one given
     bool outputsToDestTrack (AudioTrack&) const;
 

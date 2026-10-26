@@ -88,9 +88,76 @@ namespace
         return static_cast<int> (hash (midiMagicNum, trackItemID.getRawID()));
     }
 
+    //==============================================================================
+    /** Which tracks feed which, and which are sidechain sources, found once per graph build.
+        Without these, building each track's Node searches every other track and plugin,
+        so rebuilding the graph grows with the square of the number of tracks.
+    */
+    struct TrackRoutingCache
+    {
+        explicit TrackRoutingCache (Edit& e)
+            : edit (e)
+        {
+            for (auto p : edit.getPluginCache().getPlugins())
+                if (auto id = p->getSidechainSourceID(); id.isValid())
+                    sidechainSources.insert (id.getRawID());
+
+            auto addInput = [this] (Track& source, TrackOutput* output)
+            {
+                if (! source.isPartOfSubmix() && output != nullptr)
+                    if (auto destID = output->getDestinationTrackID(); destID.isValid() && destID != source.itemID)
+                        inputTracks[destID.getRawID()].add (&source);
+            };
+
+            // In the order getDirectInputTracks used to find them: audio tracks, then folders.
+            for (auto t : getAudioTracks (edit))
+                addInput (*t, &t->getOutput());
+
+            for (auto t : getTracksOfType<FolderTrack> (edit, true))
+                addInput (*t, t->getOutput());
+        }
+
+        Edit& edit;
+        std::unordered_set<uint64_t> sidechainSources;
+        std::unordered_map<uint64_t, juce::Array<Track*>> inputTracks;
+    };
+
+    /** The cache for the graph being built on this thread, if any. */
+    thread_local TrackRoutingCache* currentTrackRoutingCache = nullptr;
+
+    TrackRoutingCache* getTrackRoutingCache (Edit& edit)
+    {
+        auto cache = currentTrackRoutingCache;
+        return cache != nullptr && &cache->edit == &edit ? cache : nullptr;
+    }
+
+    /** Makes a TrackRoutingCache for the graph built in its scope, unless one's already there. */
+    struct ScopedTrackRoutingCache
+    {
+        explicit ScopedTrackRoutingCache (Edit& edit)
+        {
+            if (currentTrackRoutingCache == nullptr)
+            {
+                cache = std::make_unique<TrackRoutingCache> (edit);
+                currentTrackRoutingCache = cache.get();
+            }
+        }
+
+        ~ScopedTrackRoutingCache()
+        {
+            if (cache != nullptr)
+                currentTrackRoutingCache = nullptr;
+        }
+
+        std::unique_ptr<TrackRoutingCache> cache;
+    };
+
     bool isSidechainSource (Track& t)
     {
         const auto itemID = t.itemID;
+
+        if (auto cache = getTrackRoutingCache (t.edit))
+            return cache->sidechainSources.count (itemID.getRawID()) > 0;
 
         for (auto p : t.edit.getPluginCache().getPlugins())
             if (p->getSidechainSourceID() == itemID)
@@ -1535,6 +1602,12 @@ std::unique_ptr<tracktion::graph::Node> createPluginNodeForTrack (Track& t,
 
 juce::Array<Track*> getDirectInputTracks (AudioTrack& at)
 {
+    if (auto cache = getTrackRoutingCache (at.edit))
+    {
+        auto found = cache->inputTracks.find (at.itemID.getRawID());
+        return found != cache->inputTracks.end() ? found->second : juce::Array<Track*>();
+    }
+
     juce::Array<Track*> inputTracks;
 
     for (auto track : getAudioTracks (at.edit))
@@ -1992,6 +2065,7 @@ std::unique_ptr<tracktion::graph::Node> createMasterFadeInOutNode (Edit& edit,
 std::unique_ptr<tracktion::graph::Node> createNodeForEdit (EditPlaybackContext& epc, std::atomic<double>& audibleTimeToUpdate, const CreateNodeParams& params)
 {
     Edit& edit = epc.edit;
+    ScopedTrackRoutingCache trackRoutingCache (edit);
     auto& playHeadState = params.processState.playHeadState;
     auto insertPlugins = getAllPluginsOfType<InsertPlugin> (edit);
 
@@ -2195,6 +2269,7 @@ std::unique_ptr<tracktion::graph::Node> createNodeForEdit (EditPlaybackContext& 
 
 std::unique_ptr<tracktion::graph::Node> createNodeForEdit (Edit& edit, const CreateNodeParams& originalParams)
 {
+    ScopedTrackRoutingCache trackRoutingCache (edit);
     std::vector<std::unique_ptr<tracktion::graph::Node>> trackNodes;
     auto params = originalParams;
     auto& playHeadState = params.processState.playHeadState;

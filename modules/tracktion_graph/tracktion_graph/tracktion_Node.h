@@ -124,6 +124,13 @@ struct NodeGraph
     std::unique_ptr<Node> rootNode;
     std::vector<Node*> orderedNodes;
     std::vector<NodeAndID> sortedNodes;
+
+    /** The Nodes of each type findNode has looked for, cast once rather than on every search.
+        Nodes look themselves up in the graph they replace as it's prepared, so without this,
+        preparing a graph grows with the square of its size.
+    */
+    std::unordered_map<std::type_index, std::vector<void*>> nodesOfType;
+    std::mutex nodesOfTypeMutex;
 };
 
 
