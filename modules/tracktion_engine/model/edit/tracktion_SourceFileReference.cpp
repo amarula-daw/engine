@@ -140,8 +140,9 @@ juce::String SourceFileReference::findPathFromFile (Edit& edit, const juce::File
     auto editFile = edit.editFileRetriever ? edit.editFileRetriever()
                                            : getEditFileFromProjectManager (edit);
 
+    // The Edit may not have been saved yet, so don't let File treat its name as a directory.
     if (shouldUseRelativePath (edit, newFile, editFile))
-        return newFile.getRelativePathFrom (editFile);
+        return newFile.getRelativePathFrom (editFile.getParentDirectory());
 
     return newFile.getFullPathName();
 }
