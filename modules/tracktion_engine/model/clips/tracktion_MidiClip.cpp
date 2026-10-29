@@ -810,6 +810,7 @@ void MidiClip::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Iden
         }
     }
     else if (tree.hasType (IDs::NOTE)
+             || (tree.getParent().hasType (IDs::NOTE) && MidiExpression::isExpression (tree.getType()))
              || tree.hasType (IDs::CONTROL)
              || tree.hasType (IDs::SYSEX)
              || tree.hasType (IDs::QUANTISATION)
@@ -826,7 +827,8 @@ void MidiClip::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Iden
 
 void MidiClip::valueTreeChildAdded (juce::ValueTree& p, juce::ValueTree& c)
 {
-    if (p.hasType (IDs::SEQUENCE))
+    if (p.hasType (IDs::SEQUENCE)
+        || (p.hasType (IDs::NOTE) && MidiExpression::isExpression (c.getType())))
         clearCachedLoopSequence();
     else if ((p == state || p.getParent() == state) && c.hasType (IDs::SEQUENCE))
         channelSequence.add (new MidiList (c, getUndoManager()));
@@ -837,7 +839,8 @@ void MidiClip::valueTreeChildAdded (juce::ValueTree& p, juce::ValueTree& c)
 
 void MidiClip::valueTreeChildRemoved (juce::ValueTree& p, juce::ValueTree& c, int)
 {
-    if (p.hasType (IDs::SEQUENCE))
+    if (p.hasType (IDs::SEQUENCE)
+        || (p.hasType (IDs::NOTE) && MidiExpression::isExpression (c.getType())))
     {
         clearCachedLoopSequence();
     }
