@@ -880,8 +880,12 @@ void MidiClip::pitchTempoTrackChanged()
     if (patternGenerator != nullptr)
         patternGenerator->refreshPatternIfNeeded();
 
-    // for the midi editor to redraw
-    state.sendPropertyChangeMessage (IDs::mute);
+    if (auto track = getTrack())
+        if (auto p = track->getParentFolderTrack())
+            p->setDirtyClips();
+
+    // Invalidate the sequence and redraw without reporting a mute state change.
+    clearCachedLoopSequence();
 }
 
 //==============================================================================
