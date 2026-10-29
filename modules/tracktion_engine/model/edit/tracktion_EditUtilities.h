@@ -35,6 +35,7 @@ void convertAllSourcePaths (Edit&, bool useRelativePaths);
 //==============================================================================
 
 /// Inserts blank space in to an Edit, splitting clips if necessary.
+/// Markers on the marker track move by their start points and are never split.
 /// If onlyTheseTracks is provided, only those tracks are affected; otherwise all tracks are.
 void insertSpaceIntoEdit (Edit&, TimeRange timeRangeToInsert,
                           const juce::Array<Track*>& onlyTheseTracks = {});
@@ -153,7 +154,10 @@ enum class CloseGap
     yes /**< Do move up subsequent track content. */
 };
 
-/** Deletes a time range of an Edit, optionally closing the gap. */
+/** Deletes a time range of an Edit, optionally closing the gap.
+    Markers on the marker track are removed when their start is in the range (end excluded),
+    and subsequent markers move as points when closing the gap.
+*/
 void deleteRegionOfTracks (Edit&, TimeRange rangeToDelete, bool onlySelectedTracks, CloseGap, SelectionManager*);
 
 /** Deletes a time range of a Clip. */

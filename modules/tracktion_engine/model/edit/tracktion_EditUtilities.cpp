@@ -121,7 +121,22 @@ void insertSpaceIntoEdit (Edit& edit, TimeRange timeRange, const juce::Array<Tra
     }
 
     for (auto ct : targets.clipTracks)
-        ct->insertSpace (time, length);
+    {
+        if (ct->isMarkerTrack())
+        {
+            // Markers represent points, even when their clips overlap the insertion point.
+            // Moving a clip may reorder the track's list, so iterate a copy.
+            const auto markers = ct->getClips();
+
+            for (auto c : markers)
+                if (c->getPosition().getStart() >= time)
+                    c->setStart (c->getPosition().getStart() + length, false, true);
+        }
+        else
+        {
+            ct->insertSpace (time, length);
+        }
+    }
 
     for (auto item : targets.automatableItems)
         for (auto param : item->getAutomatableParameters())
@@ -503,6 +518,24 @@ void deleteRegionOfTracks (Edit& edit, TimeRange rangeToDelete, bool onlySelecte
 
     for (auto ct : targets.clipTracks)
     {
+        if (ct->isMarkerTrack())
+        {
+            // Delete markers by their start point, without trimming or splitting their clips.
+            const auto markers = ct->getClips();
+
+            for (auto c : markers)
+            {
+                const auto start = c->getPosition().getStart();
+
+                if (start >= rangeToDelete.getStart() && start < rangeToDelete.getEnd())
+                    c->removeFromParent();
+                else if (closeGap == CloseGap::yes && start >= rangeToDelete.getEnd())
+                    c->setStart (start - rangeToDelete.getLength(), false, true);
+            }
+
+            continue;
+        }
+
         ct->deleteRegion (rangeToDelete, selectionManager);
 
         // Remove any tiny clips that might be left over
