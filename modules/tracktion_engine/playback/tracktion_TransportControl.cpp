@@ -25,7 +25,6 @@ namespace IDs
     DECLARE_ID (scrubInterval)
 
     DECLARE_ID (userDragging)
-    DECLARE_ID (lastUserDragTime)
     DECLARE_ID (reallocationInhibitors)
     DECLARE_ID (playbackContextAllocation)
 
@@ -159,7 +158,6 @@ struct TransportControl::TransportState : private juce::ValueTree::Listener
         startTime.referTo (transientState, IDs::startTime, um);
         endTime.referTo (transientState, IDs::endTime, um);
         userDragging.referTo (transientState, IDs::userDragging, um);
-        lastUserDragTime.referTo (transientState, IDs::lastUserDragTime, um);
         reallocationInhibitors.referTo (transientState, IDs::reallocationInhibitors, um);
         playbackContextAllocation.referTo (transientState, IDs::playbackContextAllocation, um);
 
@@ -243,7 +241,6 @@ struct TransportControl::TransportState : private juce::ValueTree::Listener
     juce::CachedValue<bool> discardRecordings, clearDevices, justSendMMCIfEnabled, canSendMMCStop,
                             allowRecordingIfNoInputsArmed, clearDevicesOnStop;
     juce::CachedValue<bool> userDragging, forceVideoJump, rewindButtonDown, fastForwardButtonDown, updatingFromPlayHead;
-    juce::CachedValue<juce::int64> lastUserDragTime;
     juce::CachedValue<TimePosition> startTime, endTime;
     juce::CachedValue<TimePosition> videoPosition;
     juce::CachedValue<int> reallocationInhibitors, playbackContextAllocation, nudgeLeftCount, nudgeRightCount;
@@ -1085,9 +1082,7 @@ void TransportControl::timerCallback()
     }
 
     // Update the transport state from the playhead if we have one
-    if (isPlayContextActive()
-         && (! transportState->userDragging)
-         && juce::Time::getMillisecondCounter() - transportState->lastUserDragTime > 200)
+    if (isPlayContextActive() && ! transportState->userDragging)
     {
         // Only update if we're not looping or we're playing as otherwise the transport
         // position will jump and be stuck at the loop in position.
@@ -1156,15 +1151,19 @@ void TransportControl::nudgeRight()
 //==============================================================================
 TimePosition TransportControl::getPosition() const
 {
+    if (isPlaying() && ! transportState->userDragging && playbackContext != nullptr
+        && playbackContext->isPlaybackGraphAllocated())
+        return playbackContext->getAudibleTimelineTime();
+
     return position.get();
 }
 
 void TransportControl::setPosition (TimePosition t)
 {
-    // This drag time update is here to avoid the transport position being updated
-    // from the playhead before the position has a chance to be dispatched by it
-    transportState->lastUserDragTime = juce::Time::getMillisecondCounter();
-    position = t;
+    if (position.get() == t)
+        performPositionChange();
+    else
+        position = t;
 }
 
 void TransportControl::setPosition (TimePosition timeToMoveTo, TimePosition timeToPerformJump)
@@ -1207,9 +1206,6 @@ void TransportControl::setUserDragging (bool b)
         }
 
         transportState->userDragging = b;
-
-        if (b)
-            transportState->lastUserDragTime = juce::Time::getMillisecondCounter();
     }
 }
 
@@ -1740,10 +1736,6 @@ void TransportControl::performPositionChange()
         playHeadWrapper->setPosition (newPos);
 
     position = newPos;
-
-
-    if (! transportState->userDragging)
-        transportState->lastUserDragTime = juce::Time::getMillisecondCounter();
 
     transportState->setVideoPosition (newPos, true);
 

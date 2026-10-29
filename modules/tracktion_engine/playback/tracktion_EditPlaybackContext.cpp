@@ -262,7 +262,22 @@ struct EditPlaybackContext::NodePlaybackContext
         }
 
         pendingRollInToLoop.store (false, std::memory_order_release);
+
+        // Keep the requested time visible until a whole block has processed it.
+        // A generation prevents an older block from acknowledging a newer seek.
+        requestedPosition.store (positionToJumpTo.inSeconds(), std::memory_order_release);
+        reportRequestedPosition.store (! whenToJump.has_value(), std::memory_order_release);
+        postedPositionGeneration.fetch_add (1, std::memory_order_release);
         positionUpdatePending = true;
+    }
+
+    std::optional<TimePosition> getRequestedPosition() const
+    {
+        if (reportRequestedPosition.load (std::memory_order_acquire)
+            && postedPositionGeneration.load (std::memory_order_acquire) != processedPositionGeneration.load (std::memory_order_acquire))
+            return TimePosition::fromSeconds (requestedPosition.load (std::memory_order_acquire));
+
+        return {};
     }
 
     std::optional<TimePosition> getPendingPositionChange() const
@@ -340,7 +355,8 @@ struct EditPlaybackContext::NodePlaybackContext
 
     void process (float* const* allChannels, int numChannels, int destNumSamples)
     {
-        const auto referenceSampleRange = getReferenceSampleRange();         // Distpatch pending positions
+        const auto referenceSampleRange = getReferenceSampleRange();
+        std::optional<uint64_t> positionGenerationToAcknowledge;
 
         if (positionUpdatePending.load (std::memory_order_acquire))
         {
@@ -382,6 +398,7 @@ struct EditPlaybackContext::NodePlaybackContext
             {
                 if (positionUpdatePending.exchange (false))
                 {
+                    positionGenerationToAcknowledge = postedPositionGeneration.load (std::memory_order_acquire);
                     const auto samplePos = timeToSample (pendingPosition.load (std::memory_order_acquire), sampleRate);
 
                     if (pendingRollInToLoop.load (std::memory_order_acquire))
@@ -427,6 +444,10 @@ struct EditPlaybackContext::NodePlaybackContext
             player.process (pc);
         }
 
+        // The graph has now published audiblePlaybackTime for this position.
+        if (positionGenerationToAcknowledge)
+            processedPositionGeneration.store (*positionGenerationToAcknowledge, std::memory_order_release);
+
         tempoState = { tempoSequence.getInternalSequence().hash(),
                        processState.editBeatRange.getEnd() };
     }
@@ -458,6 +479,9 @@ private:
     int nodeBlockSize = 0;
     choc::buffer::FrameCount numSamplesToProcess = 0;
     juce::Range<double> referenceStreamRange;
+    std::atomic<double> requestedPosition { 0.0 };
+    std::atomic<bool> reportRequestedPosition { false };
+    std::atomic<uint64_t> postedPositionGeneration { 0 }, processedPositionGeneration { 0 };
     std::atomic<double> pendingPosition { 0.0 }, pendingPositionJumpTime { 0.0 };
     std::atomic<bool> positionUpdatePending { false }, pendingRollInToLoop { false }, pendingPositionJumpTimeValid { false }, playPending { false };
     double speedCompensation = 0.0, blockLengthScaleFactor = 1.0;
@@ -724,6 +748,7 @@ void EditPlaybackContext::setInsertOptionalLastStageNodeForDeviceCallback (std::
 void EditPlaybackContext::createPlayAudioNodes (TimePosition startTime)
 {
     createNode();
+    postPosition (startTime);
     startPlaying (startTime);
 }
 
@@ -1113,6 +1138,9 @@ bool EditPlaybackContext::isDragging() const
 
 TimePosition EditPlaybackContext::getPosition() const
 {
+    if (auto requested = nodePlaybackContext->getRequestedPosition())
+        return *requested;
+
     return TimePosition::fromSamples (nodePlaybackContext->playHead.getPosition(),
                                       nodePlaybackContext->getSampleRate());
 }
@@ -1137,6 +1165,10 @@ int EditPlaybackContext::getLatencySamples() const
 
 TimePosition EditPlaybackContext::getAudibleTimelineTime()
 {
+    if (nodePlaybackContext)
+        if (auto requested = nodePlaybackContext->getRequestedPosition())
+            return *requested;
+
     return nodePlaybackContext ? TimePosition::fromSeconds (audiblePlaybackTime.load())
                                : transport.getPosition();
 }

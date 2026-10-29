@@ -81,6 +81,54 @@ namespace tracktion::inline engine {
             CHECK_GT (rms (44100 + 1024, 88200), 0.5);
         }
 
+        TEST_CASE ("Requested position is reported until an audio block has processed it")
+        {
+            auto& engine = *Engine::getEngines()[0];
+            test_utilities::EnginePlayer player (engine, { .sampleRate = 44100.0, .blockSize = 512, .inputChannels = 0, .outputChannels = 1,
+                                                           .inputNames = {}, .outputNames = {} });
+
+            auto edit = test_utilities::createTestEdit (engine, 1, Edit::EditRole::forEditing);
+            auto& tc = edit->getTransport();
+            tc.ensureContextAllocated();
+            auto& context = *tc.getCurrentPlaybackContext();
+
+            // The graph was built at zero, and no audio is allowed to catch up yet.
+            tc.setPosition (7_tp);
+            CHECK_EQ (tc.getPosition(), 7_tp);
+            CHECK_EQ (context.getPosition(), 7_tp);
+            CHECK_EQ (context.getAudibleTimelineTime(), 7_tp);
+            tc.play (false);
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (250);
+            CHECK_EQ (tc.getPosition(), 7_tp);
+            CHECK_EQ (context.getAudibleTimelineTime(), 7_tp);
+
+            player.process (2048);
+            CHECK_GT (tc.getPosition(), 7_tp);
+
+            for (auto target : { 20_tp, 3_tp, 3_tp })
+            {
+                tc.setPosition (target);
+                CHECK_EQ (tc.getPosition(), target);
+                CHECK_EQ (context.getPosition(), target);
+                CHECK_EQ (context.getAudibleTimelineTime(), target);
+
+                // Read directly after rendering, without waiting for a transport timer
+                // or the old 200ms guard. Repeating the same seek must also dispatch it.
+                player.process (2048);
+                CHECK_GT (tc.getPosition(), target);
+                CHECK_LT (tc.getPosition(), target + 0.1s);
+            }
+
+            // A scheduled jump must keep reporting the current position until it is due.
+            const auto beforeJump = tc.getPosition();
+            tc.setPosition (30_tp, 4_tp);
+            CHECK_EQ (tc.getPosition(), beforeJump);
+            CHECK_EQ (context.getAudibleTimelineTime(), beforeJump);
+            player.process (44100);
+            CHECK_GT (tc.getPosition(), 30_tp);
+            CHECK_LT (tc.getPosition(), 30.1_tp);
+        }
+
         TEST_CASE ("Transport position set whilst stopped isn't quantised to samples")
         {
             auto& engine = *Engine::getEngines()[0];
@@ -98,8 +146,7 @@ namespace tracktion::inline engine {
             tc.setPosition (barTime);
 
             // Process audio blocks so the playhead applies the posted position, and pump
-            // the message loop past the transport's 200ms drag-guard so its timer syncs
-            // the position back from the sample-quantised playhead
+            // the message loop so the timer syncs the sample-quantised position back
             for (int i = 0; i < 25; ++i)
             {
                 player.process (512);
