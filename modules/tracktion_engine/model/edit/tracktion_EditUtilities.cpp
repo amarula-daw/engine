@@ -105,8 +105,199 @@ bool referencesProjectItem (Edit& edit, ProjectItemRef itemRef)
 
 //==============================================================================
 //==============================================================================
-void insertSpaceIntoEdit (Edit& edit, TimeRange timeRange, const juce::Array<Track*>& onlyTheseTracks)
+namespace
 {
+    void duplicateRangeOfEdit (Edit& edit, TimeRange range, const std::function<void (Clip&, Clip&)>& onClipCopy)
+    {
+        auto& sequence = edit.tempoSequence;
+
+        // Host descriptions round seconds to microseconds. Use the real ramp endpoint
+        // rather than changing its subdivision grid for a rounded timestamp.
+        auto start = range.getStart();
+        auto end = range.getEnd();
+
+        for (auto tempo : sequence.getTempos())
+        {
+            const auto point = tempo->getStartTime();
+
+            if (std::abs ((point - start).inSeconds()) < 1.0e-6)
+                start = point;
+
+            if (std::abs ((point - end).inSeconds()) < 1.0e-6)
+                end = point;
+        }
+
+        // UI times are rounded to microseconds, on either side of a bar line.
+        const auto snapBar = [&] (TimePosition time)
+        {
+            const auto bar = sequence.toBarsAndBeats (time).bars;
+
+            for (int b : { bar, bar + 1 })
+                if (auto line = sequence.toTime (tempo::BarsAndBeats { b });
+                    std::abs ((line - time).inSeconds()) < 0.001)
+                    return line;
+
+            return time;
+        };
+        start = snapBar (start);
+        end = snapBar (end);
+
+        if (end <= start)
+            return;
+
+        range = { start, end };
+        const auto beats = sequence.toBeats (range);
+        const auto original = sequence.getInternalSequence();
+        const auto length = beats.getLength();
+        auto um = &edit.getUndoManager();
+        EditSpaceTargets targets (edit, {});
+
+        struct CurveCopy
+        {
+            AutomationCurve* curve;
+            float startValue, endValue;
+            juce::Array<AutomationCurve::AutomationPoint> points;
+        };
+        std::vector<CurveCopy> curves;
+
+        for (auto item : targets.automatableItems)
+        {
+            // Clip plugins travel with their clip, not with project automation.
+            if (auto plugin = dynamic_cast<Plugin*> (item); plugin != nullptr && plugin->getOwnerClip() != nullptr)
+                continue;
+
+            for (auto param : item->getAutomatableParameters())
+            {
+                auto& curve = param->getCurve();
+
+                if (curve.getNumPoints() != 0)
+                {
+                    const auto fallback = param->getCurrentBaseValue();
+                    curves.push_back ({ &curve, curve.getValueAt (start, fallback), curve.getValueAt (end, fallback),
+                                        curve.getPointsInRegion (range) });
+                }
+            }
+        }
+
+        struct ClipBeats
+        {
+            Clip::Ptr clip;
+            BeatPosition start, end, contentStart;
+            TimeDuration offset;
+        };
+        std::vector<ClipBeats> positions;
+        const auto savePosition = [&] (Clip& clip, TimeRange window, BeatDuration shift, TimeDuration offset)
+        {
+            positions.push_back ({ &clip, original.toBeats (window.getStart()) + shift,
+                                   original.toBeats (window.getEnd()) + shift,
+                                   clip.getContentStartBeat() + shift, offset });
+        };
+
+        for (auto ct : targets.clipTracks)
+        {
+            if (! ct->isMarkerTrack())
+                ct->splitAt (end);
+
+            // Copies and moves reorder the track, so visit only the original list.
+            const auto clips = ct->getClips();
+
+            for (auto c : clips)
+            {
+                const auto pos = c->getPosition();
+
+                if (pos.getStart() >= end)
+                    savePosition (*c, pos.time, length, pos.offset);
+                else if (ct->isMarkerTrack() ? pos.getStart() >= start : pos.time.overlaps (range))
+                {
+                    c->flushStateToValueTree();
+
+                    if (auto copy = duplicateClip (*c))
+                    {
+                        if (onClipCopy)
+                            onClipCopy (*c, *copy);
+
+                        const auto window = ct->isMarkerTrack() ? pos.time : pos.time.getIntersectionWith (range);
+                        savePosition (*copy, window, length, pos.offset + (window.getStart() - pos.getStart()));
+
+                        if (auto marker = dynamic_cast<MarkerClip*> (copy.get()))
+                        {
+                            marker->setMarkerID (edit.getMarkerManager().getNextUniqueID());
+                            marker->setName (c->getName());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pitch settings only move; the app's key is project-wide.
+        auto& pitches = edit.pitchSequence;
+
+        for (int i = pitches.getNumPitches(); --i > 0;)
+            if (auto p = pitches.getPitch (i); p->getStartBeatNumber() >= beats.getEnd())
+                pitches.movePitchStart (*p, length, false);
+
+        sequence.insertDuplicateOfRange (range);
+
+        for (const auto& saved : positions)
+        {
+            const auto newStart = sequence.toTime (saved.start);
+            saved.clip->setPosition ({ { newStart, sequence.toTime (saved.end) }, saved.offset });
+
+            if (saved.clip->contentFollowsBeats())
+                saved.clip->setContentStartBeat (saved.contentStart);
+
+            // Plugin curves use absolute edit seconds, unlike source-beat clip automation.
+            if (auto plugins = saved.clip->getPluginList())
+                for (auto plugin : plugins->getPlugins())
+                    for (auto param : plugin->getAutomatableParameters())
+                    {
+                        auto& curve = param->getCurve();
+
+                        for (int i = curve.getNumPoints(); --i >= 0;)
+                            curve.setPointPosition (i, EditPosition (sequence.toTime (
+                                original.toBeats (curve.getPointTime (i)) + length)), um);
+                    }
+        }
+
+        // AutomatableParameter curves use seconds. Map every moved/copied point through
+        // its original beat, as a cropped ramp can change both the seam time and duration.
+        for (const auto& copy : curves)
+        {
+            auto& curve = *copy.curve;
+            const auto shifted = [&] (TimePosition t) { return sequence.toTime (original.toBeats (t) + length); };
+            const auto seam = sequence.toTime (beats.getEnd());
+            const auto copyEnd = sequence.toTime (beats.getEnd() + length);
+
+            for (int i = curve.getNumPoints(); --i >= 0;)
+                if (auto t = curve.getPointTime (i); t >= end)
+                    curve.setPointPosition (i, EditPosition (shifted (t)), um);
+
+            if (! juce::approximatelyEqual (curve.getValueAt (seam, copy.endValue), copy.endValue))
+                curve.addPoint (seam, copy.endValue, 0.0f, um);
+
+            if (copy.points.isEmpty() || std::abs ((toTime (copy.points[0].time, sequence) - start).inSeconds()) > 1.0e-6)
+                curve.addPoint (seam, copy.startValue, 0.0f, um);
+
+            for (const auto& point : copy.points)
+                curve.addPoint (shifted (toTime (point.time, sequence)), point.value, point.curve, um);
+
+            if (! juce::approximatelyEqual (curve.getValueAt (copyEnd, copy.endValue), copy.endValue))
+                curve.addPoint (copyEnd, copy.endValue, 0.0f, um);
+        }
+    }
+}
+
+void insertSpaceIntoEdit (Edit& edit, TimeRange timeRange, const juce::Array<Track*>& onlyTheseTracks, bool duplicateTempoSequence,
+                          const std::function<void (Clip&, Clip&)>& onClipCopy)
+{
+    // Invalid duplicate requests fall back to the ordinary insert, including in release builds.
+    if (duplicateTempoSequence && onlyTheseTracks.isEmpty()
+        && timeRange.getStart() - timeRange.getLength() >= TimePosition())
+    {
+        duplicateRangeOfEdit (edit, { timeRange.getStart() - timeRange.getLength(), timeRange.getStart() }, onClipCopy);
+        return;
+    }
+
     const bool allTracks = onlyTheseTracks.isEmpty();
     const bool doTempoTrackFirst = ! edit.getTimecodeFormat().isBarsBeats();
     const auto time = timeRange.getStart();

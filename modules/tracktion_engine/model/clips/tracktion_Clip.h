@@ -297,6 +297,14 @@ public:
     */
     void setOffset (TimeDuration newOffset);
 
+    /** Sets the source content's origin in Edit beats, adjusting the offset in seconds.
+        Useful when moving beat-based content across tempo changes.
+    */
+    void setContentStartBeat (BeatPosition);
+
+    /** Whether this clip's source content follows Edit beats (MIDI, steps, auto-tempo audio). */
+    bool contentFollowsBeats() const;
+
     /** Trims away any part of the clip that overlaps this region. */
     void trimAwayOverlap (TimeRange editRangeToTrim);
 

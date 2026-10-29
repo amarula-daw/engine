@@ -160,6 +160,18 @@ public:
     /** Inserts space in to a sequence, shifting TempoSettings and TimeSigs. */
     void insertSpaceIntoSequence (TimePosition time, TimeDuration amountOfSpaceInSeconds, bool snapToBeat);
 
+    /** Inserts a copy of the tempo and time signatures in the half-open range immediately
+        after it, shifting later settings by the range's beat length. Content is not remapped.
+        Cut ramps use interpolated edge tempos and fitted curves to preserve boundary times.
+        Complete ramps and linear curves retain their curve values. A ramp ending at the seam keeps its target; the copied
+        starting tempo jumps one MIDI tick (1/960 beat) later (less for very short spans),
+        keeping the original ramp and distinct editable points.
+        Later meter settings shift by the inserted beats. In-span meter is copied only
+        when both edges are original bar lines (snapping timestamps within 1 ms).
+        Uses the Edit's undo manager without starting a new transaction.
+    */
+    void insertDuplicateOfRange (TimeRange);
+
     /** Removes a region in a sequence, shifting TempoSettings and TimeSigs. */
     void deleteRegion (TimeRange);
 

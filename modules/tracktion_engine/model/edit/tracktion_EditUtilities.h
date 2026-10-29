@@ -37,8 +37,14 @@ void convertAllSourcePaths (Edit&, bool useRelativePaths);
 /// Inserts blank space in to an Edit, splitting clips if necessary.
 /// Markers on the marker track move by their start points and are never split.
 /// If onlyTheseTracks is provided, only those tracks are affected; otherwise all tracks are.
+/// With duplicateTempoSequence, inserts the tempo/meter of the preceding span of the same
+/// duration, clips, markers and automation instead of blank space. Invalid duplicate
+/// requests (a track subset or source before zero) fall back to ordinary insertion.
+/// Later meter settings shift by the inserted beats; in-span meter is copied only for whole bars.
+/// onClipCopy is called after splitting the source, allowing clients to link each copy to its head.
 void insertSpaceIntoEdit (Edit&, TimeRange timeRangeToInsert,
-                          const juce::Array<Track*>& onlyTheseTracks = {});
+                          const juce::Array<Track*>& onlyTheseTracks = {}, bool duplicateTempoSequence = false,
+                          const std::function<void (Clip& source, Clip& copy)>& onClipCopy = {});
 
 /// Inserts a number of blank beats in to the Edit.
 void insertSpaceIntoEditFromBeatRange (Edit&, BeatRange);

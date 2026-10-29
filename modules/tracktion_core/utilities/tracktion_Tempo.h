@@ -269,11 +269,12 @@ namespace tempo
             size_t index = 0;
         };
 
+        /** Returns the unsampled curve tempo, useful for splitting a ramp at a beat. */
+        static double calcCurveBpm (double beat, const TempoChange, const TempoChange);
+
     private:
         std::vector<Section> sections;
         size_t hashCode = 0;
-
-        static double calcCurveBpm (double beat, const TempoChange, const TempoChange);
     };
 }
 
@@ -564,7 +565,9 @@ inline Sequence::Sequence (std::vector<TempoChange> tempos, std::vector<TimeSigC
         int numSubdivisions = 1;
 
         if (nextTempoValid && (currTempo.curve != -1.0f && currTempo.curve != 1.0f))
-            numSubdivisions = static_cast<int> (std::clamp (4.0 * (tempos[tempoIdx].startBeat - currentBeat).inBeats(), 1.0, 100.0));
+            // Translating a ramp, or serialising its beat positions, must not turn e.g.
+            // 32 subdivisions into 31 because the beat difference is just below 8.
+            numSubdivisions = static_cast<int> (std::clamp (4.0 * (tempos[tempoIdx].startBeat - currentBeat).inBeats() + 1.0e-9, 1.0, 100.0));
 
         const auto numBeats = BeatDuration::fromBeats ((i < beatsWithChanges.size() - 1)
                                                             ? ((beatsWithChanges[i + 1] - currentBeat).inBeats() / (double) numSubdivisions)

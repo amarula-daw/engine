@@ -420,6 +420,19 @@ void Clip::setOffset (TimeDuration newOffset)
     setPosition (pos);
 }
 
+void Clip::setContentStartBeat (BeatPosition beat)
+{
+    setOffset (getPosition().getStart() - edit.tempoSequence.toTime (beat));
+}
+
+bool Clip::contentFollowsBeats() const
+{
+    if (auto audio = dynamic_cast<const AudioClipBase*> (this))
+        return audio->getAutoTempo();
+
+    return type == Type::midi || type == Type::step;
+}
+
 juce::Array<TimePosition> Clip::getInterestingTimes()
 {
     juce::Array<TimePosition> times;

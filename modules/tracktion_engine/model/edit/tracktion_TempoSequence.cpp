@@ -149,6 +149,7 @@ void TempoSequence::setState (const juce::ValueTree& v, bool remapEdit)
         getTempo (i)->startBeatNumber = std::max (getTempo (i)->startBeatNumber.get(),
                                                   getTempo (i - 1)->startBeatNumber.get());
 
+    // Preserve fractional positions, but keep signatures at least one beat apart.
     for (int i = 1; i < getNumTimeSigs(); ++i)
         getTimeSig (i)->startBeatNumber = std::max (getTimeSig (i)->startBeatNumber.get(),
                                                     getTimeSig (i - 1)->startBeatNumber.get() + BeatDuration::fromBeats (1));
@@ -377,6 +378,300 @@ void TempoSequence::insertSpaceIntoSequence (TimePosition time, TimeDuration amo
         for (int i = getNumTempos(); --i >= endIndex;)
             moveTempoStart (i, beatsToInsert, snapToBeat);
     }
+}
+
+void TempoSequence::insertDuplicateOfRange (TimeRange range)
+{
+    if (range.isEmpty() || range.getStart() < TimePosition())
+        return;
+
+    updateTempoDataIfNeeded();
+    const auto original = internalSequence;
+    const auto snapBar = [&] (TimePosition time)
+    {
+        const auto bar = original.toBarsAndBeats (time).bars;
+
+        for (int b : { bar, bar + 1 })
+            if (auto line = original.toTime (tempo::BarsAndBeats { b });
+                std::abs ((line - time).inSeconds()) < 0.001)
+                return line;
+
+        return time;
+    };
+    range = { snapBar (range.getStart()), snapBar (range.getEnd()) };
+
+    if (range.isEmpty())
+        return;
+
+    const auto start = original.toBeats (range.getStart());
+    const auto end = original.toBeats (range.getEnd());
+    const auto length = end - start;
+    std::vector<juce::ValueTree> tempoStates, timeSigStates;
+
+    for (auto t : getTempos())
+        tempoStates.push_back (t->state.createCopy());
+
+    for (auto ts : getTimeSigs())
+        timeSigStates.push_back (ts->state.createCopy());
+
+    const auto getBeat = [] (const juce::ValueTree& v)
+    {
+        return BeatPosition::fromBeats (static_cast<double> (v[IDs::startBeat]));
+    };
+
+    std::vector<BeatPosition> tempoOrigins;
+    std::vector<TimePosition> tempoTargetTimes;
+    const auto splice = [&] (const std::vector<juce::ValueTree>& settings, bool isTempo)
+    {
+        std::vector<juce::ValueTree> result;
+        const auto at = [&] (BeatPosition beat)
+        {
+            auto found = settings.front();
+
+            for (const auto& v : settings)
+            {
+                if (getBeat (v) > beat)
+                    break;
+
+                found = v;
+            }
+
+            auto boundary = found.createCopy();
+
+            if (isTempo)
+            {
+                const auto index = indexOfTempo (&getTempoAt (beat));
+                auto t = getTempo (index);
+                auto next = getTempo (index + 1);
+
+                // Both extremes are steps. Keep a cut ramp editable as a single ramp,
+                // interpolating its new endpoint rather than emitting playback sections.
+                if (next != nullptr && t->curve == -1.0f)
+                    boundary.setProperty (IDs::bpm, next->bpm.get(), nullptr);
+                else if (next != nullptr && t->curve != 1.0f)
+                    boundary.setProperty (IDs::bpm, tempo::Sequence::calcCurveBpm (beat.inBeats(),
+                        { t->startBeatNumber.get(), t->bpm.get(), t->curve.get() },
+                        { next->startBeatNumber.get(), next->bpm.get(), next->curve.get() }), nullptr);
+            }
+
+            return boundary;
+        };
+        const auto append = [&] (juce::ValueTree v, BeatPosition beat, BeatPosition origin, bool shifted)
+        {
+            v = v.createCopy();
+            v.setProperty (IDs::startBeat, beat.inBeats(), nullptr);
+            // Do not produce settings which collapse to the same beat in host readback.
+            if (! result.empty() && (beat - getBeat (result.back())).inBeats() < 2.0e-6)
+            {
+                result.back() = v;
+
+                if (isTempo)
+                {
+                    tempoOrigins.pop_back();
+                    tempoTargetTimes.pop_back();
+                }
+            }
+            else
+                result.push_back (v);
+
+            if (isTempo)
+            {
+                tempoOrigins.push_back (origin);
+                tempoTargetTimes.push_back (original.toTime (origin) + (shifted ? range.getLength() : TimeDuration()));
+            }
+        };
+        const auto appendBoundary = [&] (juce::ValueTree v, BeatPosition beat, BeatPosition origin, bool shifted)
+        {
+            if (! isTempo && ! result.empty())
+            {
+                const auto& previous = result.back();
+
+                if (previous[IDs::numerator] == v[IDs::numerator]
+                    && previous[IDs::denominator] == v[IDs::denominator]
+                    && previous[IDs::triplets] == v[IDs::triplets])
+                    return;
+            }
+
+            if (isTempo && ! result.empty())
+            {
+                const auto& previous = result.back();
+
+                auto next = getTempo (indexOfTempo (&getTempoAt (tempoOrigins.back())) + 1);
+                const auto holdsBpm = static_cast<float> (previous[IDs::curve]) == 1.0f
+                                      || next == nullptr || next->bpm.get() == static_cast<double> (previous[IDs::bpm]);
+
+                if (holdsBpm && previous[IDs::bpm] == v[IDs::bpm] && previous[IDs::curve] == v[IDs::curve])
+                    return;
+            }
+
+            append (v, beat, origin, shifted);
+        };
+
+        for (const auto& v : settings)
+            if (getBeat (v) < end)
+                append (v, getBeat (v), getBeat (v), false);
+
+        auto copyStart = end;
+
+        const auto previousCurve = isTempo ? static_cast<float> (result.back()[IDs::curve]) : 1.0f;
+        const auto previousTempo = isTempo ? indexOfTempo (&getTempoAt (getBeat (result.back()))) : -1;
+        const auto nextTempo = isTempo ? getTempo (previousTempo + 1) : nullptr;
+        const auto changesBpm = nextTempo != nullptr && nextTempo->bpm.get() != static_cast<double> (result.back()[IDs::bpm]);
+        const auto isRamp = changesBpm && previousCurve != -1.0f && previousCurve != 1.0f;
+
+        if (isTempo && (isRamp || (changesBpm && previousCurve == -1.0f)))
+        {
+            // A -1 step takes its BPM from the next point, so it also needs that target.
+            // Keep the original ramp's target at the seam. The jump back to the copied
+            // tempo happens one MIDI tick later, so the original ramp is not retargeted
+            // and both points survive the host/UI's 1e-6 beat readback and validation.
+            auto target = at (end);
+            target.setProperty (IDs::curve, 1.0f, nullptr);
+            append (target, end, end, false);
+            auto next = end;
+
+            for (const auto& v : settings)
+                if (start < getBeat (v) && getBeat (v) < next)
+                    next = getBeat (v);
+
+            // Very short spans may have less than a tick before their next setting.
+            copyStart = end + BeatDuration::fromBeats (std::min (1.0 / 960.0, (next - start).inBeats() / 2.0));
+        }
+
+        appendBoundary (at (start), copyStart, start, true);
+
+        for (const auto& v : settings)
+            if (start < getBeat (v) && getBeat (v) < end)
+                append (v, getBeat (v) + length, getBeat (v), true);
+
+        // Restore the setting in effect at the source's end, even if there wasn't a point
+        // there. No snapping: seconds selections may begin or end between beats.
+        appendBoundary (at (end), end + length, end, true);
+
+        for (const auto& v : settings)
+            if (getBeat (v) > end)
+                append (v, getBeat (v) + length, getBeat (v), true);
+
+        return result;
+    };
+
+    auto newTempos = splice (tempoStates, true);
+    const auto onBar = [&] (TimePosition time)
+    {
+        const auto bar = original.toBarsAndBeats (time).bars;
+        return std::abs ((original.toTime (tempo::BarsAndBeats { bar }) - time).inSeconds()) < 0.001
+               || std::abs ((original.toTime (tempo::BarsAndBeats { bar + 1 }) - time).inSeconds()) < 0.001;
+    };
+    auto newTimeSigs = timeSigStates;
+
+    if (onBar (range.getStart()) && onBar (range.getEnd()))
+        newTimeSigs = splice (timeSigStates, false);
+    else
+        for (auto& v : newTimeSigs)
+            if (getBeat (v) >= end)
+            {
+                v = v.createCopy();
+                v.setProperty (IDs::startBeat, (getBeat (v) + length).inBeats(), nullptr);
+            }
+
+    // Cropping a Bezier ramp changes its shape. Fit each cut piece's curve against
+    // the engine's actual playback integration so its endpoint keeps its time.
+    // Linear ramps need no shape fitting; complete ramps retain their exact curve.
+    const auto makeSequence = [&]
+    {
+        std::vector<tempo::TempoChange> tempoChanges;
+        std::vector<tempo::TimeSigChange> signatures;
+        std::vector<tempo::KeyChange> pitches;
+
+        for (const auto& v : newTempos)
+            tempoChanges.push_back ({ getBeat (v), static_cast<double> (v[IDs::bpm]), static_cast<float> (v[IDs::curve]) });
+
+        for (const auto& v : newTimeSigs)
+            signatures.push_back ({ getBeat (v), static_cast<int> (v[IDs::numerator]),
+                                    static_cast<int> (v[IDs::denominator]), static_cast<bool> (v[IDs::triplets]) });
+
+        for (auto p : edit.pitchSequence.getPitches())
+            pitches.push_back ({ p->startBeat.get(), { p->pitch.get(), static_cast<int> (p->scale.get()) } });
+
+        return tempo::Sequence (std::move (tempoChanges), std::move (signatures), std::move (pitches),
+            edit.engine.getEngineBehaviour().lengthOfOneBeatDependsOnTimeSignature()
+                ? tempo::LengthOfOneBeat::dependsOnTimeSignature : tempo::LengthOfOneBeat::isAlwaysACrotchet);
+    };
+
+    for (size_t i = 0; i + 1 < newTempos.size(); ++i)
+    {
+        auto& v = newTempos[i];
+        const auto curve = static_cast<float> (v[IDs::curve]);
+
+        if (curve == 0.0f || curve == -1.0f || curve == 1.0f)
+            continue;
+
+        auto source = &getTempoAt (tempoOrigins[i]);
+        auto next = getTempo (indexOfTempo (source) + 1);
+
+        if (next == nullptr || source->bpm == next->bpm)
+            continue;
+
+        const auto finish = getBeat (newTempos[i + 1]);
+
+        if (tempoOrigins[i] == source->startBeatNumber.get() && tempoOrigins[i + 1] == next->startBeatNumber.get()
+            && std::abs (((finish - getBeat (v)) - (tempoOrigins[i + 1] - tempoOrigins[i])).inBeats()) < 1.0e-9)
+            continue;
+
+        const auto errorAt = [&] (float candidate)
+        {
+            v.setProperty (IDs::curve, candidate, nullptr);
+            return (makeSequence().toTime (finish) - tempoTargetTimes[i + 1]).inSeconds();
+        };
+        float low = -0.999999f, high = 0.999999f, best = curve;
+        auto bestError = std::abs (errorAt (best));
+        const auto increasing = errorAt (high) > errorAt (low);
+
+        for (int iteration = 0; iteration < 48; ++iteration)
+        {
+            const auto middle = (low + high) / 2.0f;
+            const auto error = errorAt (middle);
+
+            if (std::abs (error) < bestError)
+            {
+                best = middle;
+                bestError = std::abs (error);
+            }
+
+            if ((error < 0.0) == increasing)
+                low = middle;
+            else
+                high = middle;
+        }
+
+        v.setProperty (IDs::curve, best, nullptr);
+    }
+
+    auto um = getUndoManager();
+
+    const auto replaceFromStart = [&] (const auto& before, const auto& after, const juce::Identifier& type)
+    {
+        if (before.size() == after.size() && std::equal (before.begin(), before.end(), after.begin(),
+            [] (const auto& a, const auto& b) { return a.isEquivalentTo (b); }))
+            return;
+
+        // Keep earlier settings and their model objects alive. In particular, don't
+        // rewrite an unchanged meter map for partial bars or a constant signature.
+        for (int i = state.getNumChildren(); --i >= 0;)
+            if (auto child = state.getChild (i); child.hasType (type) && getBeat (child) >= start)
+                state.removeChild (i, um);
+
+        for (const auto& v : after)
+            if (getBeat (v) >= start)
+                state.addChild (v, -1, um);
+    };
+    for (size_t i = 0; i < newTempos.size() && getBeat (newTempos[i]) < start; ++i)
+        getTempo (static_cast<int> (i))->state.setProperty (IDs::curve, newTempos[i][IDs::curve], um);
+
+    replaceFromStart (tempoStates, newTempos, IDs::TEMPO);
+    replaceFromStart (timeSigStates, newTimeSigs, IDs::TIMESIG);
+
+    updateTempoData();
 }
 
 void TempoSequence::deleteRegion (TimeRange range)
