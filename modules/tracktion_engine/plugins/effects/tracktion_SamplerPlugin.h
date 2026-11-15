@@ -29,6 +29,9 @@ public:
     float getSoundGainDb (int index) const;
     float getSoundPan (int index) const;
     bool isSoundOpenEnded (int index) const;
+    int getSoundChokeGroup (int index) const;
+    double getSoundAttack (int index) const;
+    double getSoundRelease (int index) const;
     double getSoundStartTime (int index) const;
     double getSoundLength (int index) const;
     void setSoundExcerpt (int index, double start, double length);
@@ -40,6 +43,23 @@ public:
     void setSoundParams (int index, int keyNote, int minNote, int maxNote);
     void setSoundGains (int index, float gainDb, float pan);
     void setSoundOpenEnded (int index, bool isOpenEnded);
+
+    /** Puts a sound in a choke group (1 to maxChokeGroup), or none (0).
+        Starting a sound quickly fades out any other sound playing in its group,
+        like an open hi-hat cut off by a closed one.
+    */
+    void setSoundChokeGroup (int index, int chokeGroup);
+
+    /** Sets how long a sound takes to fade in when it starts, and to fade out
+        once its note ends (sounds that aren't open-ended only), in seconds.
+        A release of 0 stops the sound almost at once, as it always has.
+    */
+    void setSoundEnvelope (int index, double attackSeconds, double releaseSeconds);
+
+    static constexpr int maxChokeGroup = 16;
+    static constexpr double maxAttackSeconds = 2.0;
+    static constexpr double maxReleaseSeconds = 5.0;
+
     void setSoundMedia (int index, const juce::String& sourcePathOrProjectID);
 
     void playNotes (const juce::BigInteger& keysDown);
@@ -91,6 +111,8 @@ public:
         int keyNote = -1, minNote = 0, maxNote = 0;
         int fileStartSample = 0, fileLengthSamples = 0;
         bool openEnded = false;
+        int chokeGroup = 0;
+        double attackSeconds = 0, releaseSeconds = 0;
         float gainDb = 0, pan = 0;
         double startTime = 0, length = 0;
         AudioFile audioFile;
@@ -111,6 +133,7 @@ private:
     juce::BigInteger highlightedNotes;
 
     juce::ValueTree getSound (int index) const;
+    void chokeOtherSounds (const SamplerSound&, int sampleInBlock);
 
     void valueTreeChanged() override;
     void handleAsyncUpdate() override;

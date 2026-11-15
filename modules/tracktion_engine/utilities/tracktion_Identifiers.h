@@ -228,6 +228,7 @@ namespace IDs
     DECLARE_ID (minNote)
     DECLARE_ID (maxNote)
     DECLARE_ID (openEnded)
+    DECLARE_ID (chokeGroup)
     DECLARE_ID (SOUND)
     DECLARE_ID (threshold)
     DECLARE_ID (inputDb)
