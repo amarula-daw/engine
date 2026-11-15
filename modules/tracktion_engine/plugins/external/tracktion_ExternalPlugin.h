@@ -72,6 +72,23 @@ public:
     void getPluginStateFromTree (juce::MemoryBlock&);
 
     //==============================================================================
+    // Undo
+
+    /** Puts the plugin's current settings (its state, its parameters' values and its program)
+        into its state as a step in the Edit's undo history, if they differ from the ones last
+        written there. Returns true if they did. A drag's changes become one step.
+
+        Plugins keep their own settings, so changes made in a plugin's window, or through its
+        parameters, don't reach the undo history by themselves: this puts them there, and undoing
+        or redoing the change puts those settings back into the plugin. Changes the user makes in
+        the plugin's window call EngineBehaviour::pluginSettingsChangedByUser, which calls this.
+    */
+    bool captureStateForUndo();
+
+    /** True if the plugin's current settings differ from the ones last written to its state. */
+    bool hasUncapturedStateChange();
+
+    //==============================================================================
     // Processing & runtime overrides
 
     void updateFromMirroredPluginIfNeeded (Plugin&) override;
@@ -230,12 +247,31 @@ private:
     class PluginPlayHead;
     std::unique_ptr<PluginPlayHead> playhead;
 
-    bool fullyInitialised = false, supportsMPE = false, isFlushingLayoutToState = false;
+    bool fullyInitialised = false, supportsMPE = false, isFlushingLayoutToState = false, isWritingState = false;
+    juce::uint32 ignoreSettingsChangesUntil = 0;
 
     struct MPEChannelRemapper;
     std::unique_ptr<MPEChannelRemapper> mpeRemapper;
 
     void prepareIncomingMidiMessages (MidiMessageArray& incoming, int numSamples, bool isPlaying);
+
+    /** A plugin's settings as the Edit keeps them: its state, its parameters' values and its program. */
+    struct Settings
+    {
+        juce::String chunk, parameterValues;
+        juce::var program;
+    };
+
+    class SettingsAction;
+    std::optional<Settings> pendingSettings;    // read for settingsChangedByUser, for the capture it leads to
+    juce::String initialParameterValues;        // for a plugin from a saved Edit, which has none stored
+
+    Settings getCurrentSettings();
+    juce::String getCurrentParameterValues();
+    Settings getStoredSettings() const;
+    void writeSettings (const Settings&);
+    void restoreStateAfterUndo();
+    void settingsChangedByUser();
 
     juce::Array<ExternalAutomatableParameter*> autoParamForParamNumbers;
 

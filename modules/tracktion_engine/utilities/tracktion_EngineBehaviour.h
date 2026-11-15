@@ -78,6 +78,16 @@ public:
     /// Gives plugins an opportunity to save custom data when the plugin state gets flushed.
     virtual void saveCustomPluginProperties (juce::ValueTree&, juce::AudioPluginInstance&, juce::UndoManager*)  {}
 
+    /// Called when the user has changed an ExternalPlugin's settings in its own window: a parameter
+    /// gesture ended, or the plugin changed program or other settings that aren't parameters.
+    /// The default puts the change in the undo history as a step of its own (see
+    /// ExternalPlugin::captureStateForUndo); override it to name or group that step.
+    virtual void pluginSettingsChangedByUser (ExternalPlugin&);
+
+    /// Called after undo or redo has put an ExternalPlugin's settings back, with the indexes of
+    /// the parameters whose values changed.
+    virtual void pluginSettingsRestored (ExternalPlugin&, const juce::Array<int>& /*changedParameters*/)  {}
+
     /** Return true if your application supports scanning plugins out of process.
 
         If you want to support scanning out of process, the allowing should be added

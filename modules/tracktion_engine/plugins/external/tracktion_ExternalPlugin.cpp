@@ -47,14 +47,29 @@ public:
         triggerAsyncUpdate();
     }
 
-    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails&) override
+    void audioProcessorChanged (juce::AudioProcessor*, const ChangeDetails& details) override
     {
         if (plugin.edit.isLoading())
             return;
 
         processorChanged = true;
+
+        if (details.programChanged || details.nonParameterStateChanged)
+            settingsChanged = true;
+
         triggerAsyncUpdate();
     }
+
+    void audioProcessorParameterChangeGestureEnd (juce::AudioProcessor*, int) override
+    {
+        if (plugin.edit.isLoading())
+            return;
+
+        settingsChanged = true;
+        triggerAsyncUpdate();
+    }
+
+    void forgetSettingsChange()     { settingsChanged = false; }
 
 private:
     ExternalPlugin& plugin;
@@ -132,9 +147,12 @@ private:
             processorChanged = false;
             updateFromPlugin();
         }
+        if (settingsChanged.exchange (false))
+            plugin.settingsChangedByUser();
     }
 
     bool paramChanged = false, processorChanged = false;
+    std::atomic<bool> settingsChanged { false };
 };
 
 //==============================================================================
@@ -156,6 +174,13 @@ public:
     juce::AudioPluginInstance& getInstance()
     {
         return *pluginInstance;
+    }
+
+    /** The settings changes it was told about are in the Edit's state already. */
+    void forgetSettingsChange()
+    {
+        if (processorChangedManager)
+            processorChangedManager->forgetSettingsChange();
     }
 
     std::unique_ptr<juce::AudioPluginInstance> releaseInstance()
@@ -1066,23 +1091,14 @@ void ExternalPlugin::flushPluginStateToValueTree()
 
     if (auto pi = getAudioPluginInstance())
     {
-        if (pi->getNumPrograms() > 0)
-            state.setProperty (IDs::programNum,  pi->getCurrentProgram(), um);
-
         TRACKTION_ASSERT_MESSAGE_THREAD
-        juce::MemoryBlock chunk;
 
-        pi->suspendProcessing (true);
-        pi->getStateInformation (chunk);
+        // The plugin's settings are kept here for saving, not as a step in the undo history:
+        // captureStateForUndo puts them there when they change.
+        auto settings = getCurrentSettings();
         saveChangedParametersToState();
-        pi->suspendProcessing (false);
-
         engine.getEngineBehaviour().saveCustomPluginProperties (state, *pi, um);
-
-        if (chunk.getSize() > 0)
-            state.setProperty (IDs::state, chunk.toBase64Encoding(), um);
-        else
-            state.removeProperty (IDs::state, um);
+        writeSettings (settings);
 
         flushBusesLayoutToValueTree();
     }
@@ -1150,6 +1166,237 @@ void ExternalPlugin::getPluginStateFromTree (juce::MemoryBlock& mb)
 
     if (s.isNotEmpty())
         mb.fromBase64Encoding (s);
+}
+
+//==============================================================================
+namespace
+{
+    // How long after a plugin loads, or has its settings put back, before what it reports counts as the user's change.
+    constexpr juce::uint32 settingsSettleMs = 2000;
+}
+
+/** A change to a plugin's settings in the Edit's undo history. A drag's changes become one, and undoing or
+    redoing puts the settings back into the plugin all at once.
+*/
+class ExternalPlugin::SettingsAction  : public juce::UndoableAction
+{
+public:
+    SettingsAction (Edit& e, EditItemID id, juce::ValueTree s, Settings b, Settings a)
+        : edit (e), itemID (id), tree (std::move (s)), before (std::move (b)), after (std::move (a))
+    {
+    }
+
+    bool perform() override
+    {
+        // The plugin already has these settings the first time.
+        apply (after, ! std::exchange (firstTime, false));
+        return true;
+    }
+
+    bool undo() override
+    {
+        apply (before, true);
+        return true;
+    }
+
+    int getSizeInUnits() override
+    {
+        return (int) (before.chunk.length() + after.chunk.length() + before.parameterValues.length() + after.parameterValues.length()) + 32;
+    }
+
+    juce::UndoableAction* createCoalescedAction (juce::UndoableAction* next) override
+    {
+        if (auto other = dynamic_cast<SettingsAction*> (next); other != nullptr && other->tree == tree)
+        {
+            auto coalesced = std::make_unique<SettingsAction> (edit, itemID, tree, before, other->after);
+            coalesced->firstTime = false;
+            return coalesced.release();
+        }
+
+        return nullptr;
+    }
+
+private:
+    Edit& edit;
+    EditItemID itemID;
+    juce::ValueTree tree;
+    Settings before, after;
+    bool firstTime = true;
+
+    void apply (const Settings& settings, bool restore)
+    {
+        auto plugin = dynamic_cast<ExternalPlugin*> (findPluginForID (edit, itemID).get());
+
+        if (plugin == nullptr || plugin->state != tree)
+        {
+            // Not loaded (or not in the Edit): its state just keeps the settings.
+            tree.setProperty (IDs::state, settings.chunk, nullptr);
+            tree.setProperty (IDs::parameterValues, settings.parameterValues, nullptr);
+            return;
+        }
+
+        plugin->writeSettings (settings);
+
+        if (restore)
+            plugin->restoreStateAfterUndo();
+    }
+};
+
+ExternalPlugin::Settings ExternalPlugin::getCurrentSettings()
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+    Settings settings;
+
+    if (auto pi = getAudioPluginInstance())
+    {
+        juce::MemoryBlock chunk;
+        pi->suspendProcessing (true);
+        pi->getStateInformation (chunk);
+        pi->suspendProcessing (false);
+
+        if (chunk.getSize() > 0)
+            settings.chunk = chunk.toBase64Encoding();
+
+        settings.parameterValues = getCurrentParameterValues();
+
+        if (pi->getNumPrograms() > 0)
+            settings.program = pi->getCurrentProgram();
+    }
+
+    return settings;
+}
+
+juce::String ExternalPlugin::getCurrentParameterValues()
+{
+    // Some plugins leave parameters out of their state, so their values are kept as well.
+    juce::MemoryOutputStream values;
+
+    if (auto pi = getAudioPluginInstance())
+        for (auto* p : pi->getParameters())
+            values.writeFloat (p->getValue());
+
+    return values.getDataSize() > 0 ? values.getMemoryBlock().toBase64Encoding() : juce::String();
+}
+
+ExternalPlugin::Settings ExternalPlugin::getStoredSettings() const
+{
+    return { state.getProperty (IDs::state).toString(),
+             state.hasProperty (IDs::parameterValues) ? state.getProperty (IDs::parameterValues).toString() : initialParameterValues,
+             state.getProperty (IDs::programNum) };
+}
+
+void ExternalPlugin::writeSettings (const Settings& settings)
+{
+    const juce::ScopedValueSetter<bool> svs (isWritingState, true);
+
+    auto write = [this] (const juce::Identifier& id, const juce::var& value)
+    {
+        if (value.isVoid() || value.toString().isEmpty())
+            state.removeProperty (id, nullptr);
+        else
+            state.setProperty (id, value, nullptr);
+    };
+
+    write (IDs::state, settings.chunk);
+    write (IDs::parameterValues, settings.parameterValues);
+
+    if (! settings.program.isVoid())
+        write (IDs::programNum, settings.program);
+}
+
+bool ExternalPlugin::hasUncapturedStateChange()
+{
+    if (getAudioPluginInstance() == nullptr)
+        return false;
+
+    auto current = getCurrentSettings();
+    auto stored = getStoredSettings();
+    return current.chunk != stored.chunk || current.parameterValues != stored.parameterValues;
+}
+
+bool ExternalPlugin::captureStateForUndo()
+{
+    if (getAudioPluginInstance() == nullptr)
+        return false;
+
+    auto current = pendingSettings.has_value() ? *std::exchange (pendingSettings, std::nullopt) : getCurrentSettings();
+    auto stored = getStoredSettings();
+
+    // Changes it's been told about so far (e.g. the gesture of a parameter the host just set) are in what's captured now.
+    loadedInstance->forgetSettingsChange();
+
+    if (current.chunk == stored.chunk && current.parameterValues == stored.parameterValues)
+        return false;
+
+    if (auto um = getUndoManager())
+        um->perform (new SettingsAction (edit, itemID, state, std::move (stored), std::move (current)));
+    else
+        writeSettings (current);
+
+    return true;
+}
+
+void ExternalPlugin::restoreStateAfterUndo()
+{
+    TRACKTION_ASSERT_MESSAGE_THREAD
+    auto pi = getAudioPluginInstance();
+
+    if (pi == nullptr)
+        return;
+
+    std::vector<float> before;
+
+    for (auto* p : pi->getParameters())
+        before.push_back (p->getValue());
+
+    // Plugins can report the restored settings as a change of their own, which isn't the user's.
+    ignoreSettingsChangesUntil = juce::Time::getMillisecondCounter() + settingsSettleMs;
+
+    // The state, then the parameters' values, which some plugins leave out of their state.
+    bool restoredState = false;
+
+    if (juce::MemoryBlock chunk; chunk.fromBase64Encoding (state.getProperty (IDs::state).toString()) && chunk.getSize() > 0)
+    {
+        CRASH_TRACER_PLUGIN (getDebugName());
+        callBlockingCatching ([&pi, &chunk] { pi->setStateInformation (chunk.getData(), (int) chunk.getSize()); });
+        restoredState = true;
+    }
+
+    auto& parameters = pi->getParameters();
+
+    if (juce::MemoryBlock values; values.fromBase64Encoding (getStoredSettings().parameterValues))
+    {
+        juce::MemoryInputStream stream (values, false);
+
+        // After a state's restored, the values parameters report can be the old ones for a moment, so all are set.
+        for (int i = 0; i < parameters.size() && stream.getNumBytesRemaining() >= (juce::int64) sizeof (float); ++i)
+            if (auto value = stream.readFloat(); restoredState || parameters[i]->getValue() != value)
+                parameters[i]->setValueNotifyingHost (value);
+    }
+
+    juce::Array<int> changed;
+
+    for (int i = 0; i < parameters.size(); ++i)
+        if (i >= (int) before.size() || parameters[i]->getValue() != before[(size_t) i])
+            changed.add (i);
+
+    engine.getEngineBehaviour().pluginSettingsRestored (*this, changed);
+}
+
+void ExternalPlugin::settingsChangedByUser()
+{
+    if (juce::Time::getMillisecondCounter() < ignoreSettingsChangesUntil || getAudioPluginInstance() == nullptr)
+        return;
+
+    auto current = getCurrentSettings();
+    auto stored = getStoredSettings();
+
+    if (current.chunk == stored.chunk && current.parameterValues == stored.parameterValues)
+        return;
+
+    pendingSettings = std::move (current);
+    engine.getEngineBehaviour().pluginSettingsChangedByUser (*this);
+    pendingSettings.reset();
 }
 
 void ExternalPlugin::updateFromMirroredPluginIfNeeded (Plugin& changedPlugin)
@@ -1935,6 +2182,15 @@ void ExternalPlugin::completePluginInstanceCreation (std::unique_ptr<juce::Audio
     restorePluginStateFromValueTree (state);
     buildParameterList();
     restoreChannelLayout (*this);
+
+    // What it reports while it settles isn't the user's change, and undoing its first change needs the
+    // settings it started with: a new plugin's go in its state, and a saved one's values are kept aside.
+    ignoreSettingsChangesUntil = juce::Time::getMillisecondCounter() + settingsSettleMs;
+
+    if (! edit.isLoading() && ! state.hasProperty (IDs::state) && ! state.getChildWithName (IDs::VSTDATA).isValid())
+        writeSettings (getCurrentSettings());
+    else if (! state.hasProperty (IDs::parameterValues))
+        initialParameterValues = getCurrentParameterValues();
 }
 
 void ExternalPlugin::deletePluginInstance()
@@ -2064,6 +2320,10 @@ void ExternalPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::I
     }
     else
     {
+        // Undo or redo changed the settings, so they go back into the plugin.
+        if (v == state && (id == IDs::state || id == IDs::parameterValues) && ! isWritingState)
+            restoreStateAfterUndo();
+
         Plugin::valueTreePropertyChanged (v, id);
     }
 }

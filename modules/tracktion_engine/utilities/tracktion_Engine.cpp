@@ -304,6 +304,12 @@ BufferedAudioFileManager& Engine::getBufferedAudioFileManager()
     return *bufferedAudioFileManager;
 }
 
+void EngineBehaviour::pluginSettingsChangedByUser (ExternalPlugin& p)
+{
+    p.edit.getUndoManager().beginNewTransaction();
+    p.captureStateForUndo();
+}
+
 bool EngineBehaviour::shouldLoadPlugin (ExternalPlugin& p)
 {
     return p.edit.shouldLoadPlugins();

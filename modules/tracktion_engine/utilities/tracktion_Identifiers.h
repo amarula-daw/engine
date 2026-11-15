@@ -138,6 +138,7 @@ namespace IDs
     DECLARE_ID (index)
     DECLARE_ID (layout)
     DECLARE_ID (parameters)
+    DECLARE_ID (parameterValues)
     DECLARE_ID (CURVESECTION)
     DECLARE_ID (TEMPOCURVESECTION)
     DECLARE_ID (AUTOMATIONCURVE)
