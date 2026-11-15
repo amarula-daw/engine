@@ -209,6 +209,18 @@ void PluginNode::process (ProcessContext& pc)
         }
     }
 
+    // A MIDI plugin bypassed may leave notes it started without their note-offs, and turned
+    // back on, it doesn't know which notes are held, so both stop every note from here on
+    if (plugin->takesMidiInput())
+    {
+        const bool enabled = plugin->isEnabled();
+
+        if (wasMidiPluginEnabled.has_value() && *wasMidiPluginEnabled != enabled)
+            isAllNotesOff = true;
+
+        wasMidiPluginEnabled = enabled;
+    }
+
     // Fast path for disabled plugins: skip sub-block loop and pass MIDI straight through
     if (! shouldProcessPlugin)
     {

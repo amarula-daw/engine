@@ -76,6 +76,7 @@ private:
     std::shared_ptr<tracktion::graph::LatencyProcessor> latencyProcessor;
     std::optional<NodeProperties> cachedNodeProperties;
     bool isPrepared = false, canUseSourceBuffers = false;
+    std::optional<bool> wasMidiPluginEnabled;
 
     //==============================================================================
     void initialisePlugin (double sampleRateToUse, int blockSizeToUse);
