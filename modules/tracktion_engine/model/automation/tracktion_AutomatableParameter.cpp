@@ -412,6 +412,7 @@ public:
                                    AutomationCurveModifier::Assignment::Ptr curveAssignment,
                                    AutomationCurveModifier& acm)
         : AutomationModifierSource (std::move (curveAssignment)),
+          curveModifierOwner (&acm),
           curveModifier (acm),
           parameter (parameter_)
     {
@@ -511,6 +512,9 @@ public:
         return &curveModifier;
     }
 
+    // The audio thread can still be using this source (through the parameter's cached sources) after the
+    // curve's clip is deleted, so the source keeps its curve alive rather than referring to it.
+    const AutomationCurveModifier::Ptr curveModifierOwner;
     AutomationCurveModifier& curveModifier;
     AutomatableParameter& parameter;
 
