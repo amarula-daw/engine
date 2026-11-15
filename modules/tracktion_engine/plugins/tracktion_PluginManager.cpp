@@ -58,6 +58,12 @@ void PluginManager::initialise()
     createBuiltInType<SamplerPlugin>();
     createBuiltInType<FourOscPlugin>();
     createBuiltInType<MidiModifierPlugin>();
+    createBuiltInType<ArpeggiatorPlugin>();
+    createBuiltInType<ChordPlugin>();
+    createBuiltInType<NoteEchoPlugin>();
+    createBuiltInType<RandomizePlugin>();
+    createBuiltInType<ScalePlugin>();
+    createBuiltInType<VelocityPlugin>();
     createBuiltInType<MidiPatchBayPlugin>();
     createBuiltInType<PatchBayPlugin>();
     createBuiltInType<AuxSendPlugin>();
