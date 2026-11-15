@@ -129,11 +129,18 @@ void MidiEffectPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v
 
 void MidiEffectPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& i)
 {
-    // Undo and redo change the stored values, which the parameters follow (unless automation is playing them)
+    // Undo and redo change the stored values, which the parameters follow (unless automation is playing them).
+    // The tree's listeners run in no particular order, so the value's cache may not have heard yet.
     if (v == state)
+    {
+        for (auto value : values)
+            if (value->getPropertyID() == i)
+                value->forceUpdateOfCachedValue();
+
         for (auto p : getAutomatableParameters())
             if (p->paramID == i.toString() && ! p->hasAutomationPoints())
                 p->updateFromAttachedValue();
+    }
 
     Plugin::valueTreePropertyChanged (v, i);
 }
