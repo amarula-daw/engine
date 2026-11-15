@@ -61,6 +61,56 @@ struct PanAutomatableParameter : public AutomatableParameter
 };
 
 //==============================================================================
+struct TrimAutomatableParameter : public AutomatableParameter
+{
+    TrimAutomatableParameter (const juce::String& xmlTag, const juce::String& name,
+                              Plugin& owner, juce::Range<float> r)
+        : AutomatableParameter (xmlTag, name, owner, r)
+    {
+    }
+
+    ~TrimAutomatableParameter() override
+    {
+        notifyListenersOfDeletion();
+    }
+
+    juce::String valueToString (float value) override
+    {
+        return juce::Decibels::toString (value + 0.001);
+    }
+
+    float stringToValue (const juce::String& str) override
+    {
+        return dbStringToDb (str);
+    }
+};
+
+//==============================================================================
+struct WidthAutomatableParameter : public AutomatableParameter
+{
+    WidthAutomatableParameter (const juce::String& xmlTag, const juce::String& name,
+                               Plugin& owner, juce::Range<float> r)
+        : AutomatableParameter (xmlTag, name, owner, r)
+    {
+    }
+
+    ~WidthAutomatableParameter() override
+    {
+        notifyListenersOfDeletion();
+    }
+
+    juce::String valueToString (float value) override
+    {
+        return juce::String (juce::roundToInt (value * 100.0f)) + "%";
+    }
+
+    float stringToValue (const juce::String& str) override
+    {
+        return str.retainCharacters ("0123456789.-").getFloatValue() / 100.0f;
+    }
+};
+
+//==============================================================================
 struct MasterVolParameter  : public VolAutomatableParameter
 {
     MasterVolParameter (const juce::String& xmlTag, const juce::String& name,
@@ -109,6 +159,9 @@ VolumeAndPanPlugin::VolumeAndPanPlugin (PluginCreationInfo info, bool isMasterVo
     ignoreVca.referTo (state, IDs::ignoreVca, um);
     polarity.referTo (state, IDs::polarity, um);
     panLaw.referTo (state, IDs::panLaw, um);
+    trim.referTo (state, IDs::trim, um);
+    width.referTo (state, IDs::width, um, 1.0f);
+    mono.referTo (state, IDs::mono, um);
 
     if (isMasterVolumeNode)
     {
@@ -121,8 +174,13 @@ VolumeAndPanPlugin::VolumeAndPanPlugin (PluginCreationInfo info, bool isMasterVo
         addAutomatableParameter (panParam = new PanAutomatableParameter ("pan", TRANS("Pan"), *this, { -1.0f, 1.0f }));
     }
 
+    addAutomatableParameter (trimParam = new TrimAutomatableParameter ("trim", TRANS("Trim"), *this, { -24.0f, 24.0f }));
+    addAutomatableParameter (widthParam = new WidthAutomatableParameter ("width", TRANS("Width"), *this, { 0.0f, 2.0f }));
+
     volParam->attachToCurrentValue (volume);
     panParam->attachToCurrentValue (pan);
+    trimParam->attachToCurrentValue (trim);
+    widthParam->attachToCurrentValue (width);
 }
 
 VolumeAndPanPlugin::VolumeAndPanPlugin (Edit& ed, const juce::ValueTree& v, bool isMaster)
@@ -136,6 +194,8 @@ VolumeAndPanPlugin::~VolumeAndPanPlugin()
 
     volParam->detachFromCurrentValue();
     panParam->detachFromCurrentValue();
+    trimParam->detachFromCurrentValue();
+    widthParam->detachFromCurrentValue();
 }
 
 juce::ValueTree VolumeAndPanPlugin::create()
@@ -157,6 +217,8 @@ void VolumeAndPanPlugin::initialise (const PluginInitialisationInfo& info)
     smoothedGainL.reset (info.sampleRate, smoothingRampTimeSeconds);
     smoothedGainR.reset (info.sampleRate, smoothingRampTimeSeconds);
     smoothedGain.reset (info.sampleRate, smoothingRampTimeSeconds);
+    smoothedWidth.reset (info.sampleRate, smoothingRampTimeSeconds);
+    smoothedWidth.setCurrentAndTargetValue (mono ? 0.0f : getWidth());
 }
 
 void VolumeAndPanPlugin::initialiseWithoutStopping (const PluginInitialisationInfo&)
@@ -212,24 +274,18 @@ void VolumeAndPanPlugin::setSmoothedValueTargets (TimePosition time, bool update
     float gainL, gainR;
     getGainsFromVolumeFaderPositionAndPan (sliderPos, getPan(), getPanLaw(), gainL, gainR);
 
-    if (polarity)
-    {
-        gainL = -gainL;
-        gainR = -gainR;
-    }
+    // The trim goes on top of the fader, and polarity inverts the whole channel
+    auto trimGain = juce::Decibels::decibelsToGain (getTrimDb());
 
-    smoothedGainL.setTargetValue (gainL);
-    smoothedGainR.setTargetValue (gainR);
+    if (polarity)
+        trimGain = -trimGain;
+
+    smoothedGainL.setTargetValue (gainL * trimGain);
+    smoothedGainR.setTargetValue (gainR * trimGain);
+    smoothedWidth.setTargetValue (mono ? 0.0f : getWidth());
 
     if (updateGain)
-    {
-        auto gain = volumeFaderPositionToGain (sliderPos);
-
-        if (polarity)
-            gain = -gain;
-
-        smoothedGain.setTargetValue (gain);
-    }
+        smoothedGain.setTargetValue (volumeFaderPositionToGain (sliderPos) * trimGain);
 }
 
 void VolumeAndPanPlugin::applyToBuffer (const PluginRenderContext& fc)
@@ -246,6 +302,9 @@ void VolumeAndPanPlugin::applyToBuffer (const PluginRenderContext& fc)
                 return;
 
             setSmoothedValueTargets (fc.editTime.getStart(), numChansIn > 2);
+
+            if (numChansIn > 1)
+                applyWidth (*buffer, fc.bufferStartSample, fc.bufferNumSamples);
 
             smoothedGainL.applyGain (buffer->getWritePointer (0, fc.bufferStartSample), fc.bufferNumSamples);
 
@@ -272,6 +331,25 @@ void VolumeAndPanPlugin::applyToBuffer (const PluginRenderContext& fc)
     }
 }
 
+void VolumeAndPanPlugin::applyWidth (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+{
+    if (! smoothedWidth.isSmoothing() && smoothedWidth.getTargetValue() == 1.0f)
+        return;
+
+    // Scales the difference between the sides, before the pan: the middle stays, the sides follow the width
+    auto l = buffer.getWritePointer (0, startSample);
+    auto r = buffer.getWritePointer (1, startSample);
+
+    for (int i = 0; i < numSamples; ++i)
+    {
+        const auto w = smoothedWidth.getNextValue();
+        const auto mid = (l[i] + r[i]) * 0.5f;
+        const auto side = (l[i] - r[i]) * 0.5f * w;
+        l[i] = mid + side;
+        r[i] = mid - side;
+    }
+}
+
 void VolumeAndPanPlugin::refreshVCATrack()
 {
     juce::ReferenceCountedObjectPtr<AudioTrack> newVcaTrack (ignoreVca ? nullptr : dynamic_cast<AudioTrack*> (getOwnerTrack()));
@@ -295,6 +373,16 @@ void VolumeAndPanPlugin::setVolumeDb (float vol)
 void VolumeAndPanPlugin::setSliderPos (float newV)
 {
     volParam->setParameter (juce::jlimit (0.0f, 1.0f, newV), juce::sendNotification);
+}
+
+void VolumeAndPanPlugin::setTrimDb (float db)
+{
+    trimParam->setParameter (juce::jlimit (-24.0f, 24.0f, db), juce::sendNotification);
+}
+
+void VolumeAndPanPlugin::setWidth (float newWidth)
+{
+    widthParam->setParameter (juce::jlimit (0.0f, 2.0f, newWidth), juce::sendNotification);
 }
 
 void VolumeAndPanPlugin::setPan (float p)
@@ -341,7 +429,7 @@ void VolumeAndPanPlugin::muteOrUnmute()
 
 void VolumeAndPanPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v)
 {
-    copyPropertiesToCachedValues (v, volume, pan, panLaw, applyToMidi, ignoreVca, polarity);
+    copyPropertiesToCachedValues (v, volume, pan, panLaw, applyToMidi, ignoreVca, polarity, trim, width, mono);
 
     for (auto p : getAutomatableParameters())
         p->updateFromAttachedValue();

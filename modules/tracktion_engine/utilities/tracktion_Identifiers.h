@@ -204,6 +204,8 @@ namespace IDs
     DECLARE_ID (depthMs)
     DECLARE_ID (speedHz)
     DECLARE_ID (width)
+    DECLARE_ID (trim)
+    DECLARE_ID (mono)
     DECLARE_ID (mixProportion)
     DECLARE_ID (showMidi)
     DECLARE_ID (depth)

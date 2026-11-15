@@ -41,6 +41,14 @@ public:
     void setPanLaw (PanLaw newPanLaw)                       { panLaw = (int) newPanLaw; }
     PanLaw getPanLaw() const noexcept;
 
+    /** A gain in dB before the fader, from -24 to +24, for setting a level without moving the fader or its automation. */
+    float getTrimDb() const                                 { return trimParam->getCurrentValue(); }
+    void setTrimDb (float db);
+
+    /** Stereo width: 0 is mono, 1 leaves it as it is, 2 doubles the difference between the sides. */
+    float getWidth() const                                  { return widthParam->getCurrentValue(); }
+    void setWidth (float newWidth);
+
     void setAppliedToMidiVolumes (bool);
     bool isAppliedToMidiVolumes() const                     { return applyToMidi; }
 
@@ -66,12 +74,14 @@ public:
     void restorePluginStateFromValueTree (const juce::ValueTree&) override;
 
     //==============================================================================
-    juce::CachedValue<float> volume, pan;
-    juce::CachedValue<bool> applyToMidi, ignoreVca, polarity;
+    juce::CachedValue<float> volume, pan, trim, width;
+    juce::CachedValue<bool> applyToMidi, ignoreVca, polarity, mono;
     juce::CachedValue<int> panLaw;
 
     // NB the units used here are slider position
     AutomatableParameter::Ptr volParam, panParam;
+    // In dB, and as a width (see getWidth)
+    AutomatableParameter::Ptr trimParam, widthParam;
 
     /// This is the time over which volume changes will be ramped, to avoid
     /// zipper noise.
@@ -79,13 +89,14 @@ public:
 
 private:
     float lastVolumeBeforeMute = 0.0f;
-    juce::SmoothedValue<float> smoothedGainL, smoothedGainR, smoothedGain;
+    juce::SmoothedValue<float> smoothedGainL, smoothedGainR, smoothedGain, smoothedWidth;
 
     RealTimeSpinLock vcaTrackLock;
     juce::ReferenceCountedObjectPtr<AudioTrack> vcaTrack;
     const bool isMasterVolume = false;
 
     void setSmoothedValueTargets (TimePosition, bool);
+    void applyWidth (juce::AudioBuffer<float>&, int startSample, int numSamples);
     void refreshVCATrack();
     float getVCAPosDelta (TimePosition);
 
