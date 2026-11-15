@@ -83,6 +83,7 @@ public:
     void initialise (const PluginInitialisationInfo&) override;
     void deinitialise() override;
     void applyToBuffer (const PluginRenderContext&) override;
+    void midiPanic() override                           { allNotesOff(); }
 
     //==============================================================================
     bool takesMidiInput() override                      { return true; }
