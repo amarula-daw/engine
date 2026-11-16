@@ -54,6 +54,10 @@ public:
 
     void muteOrUnmute();
 
+    /** Silences the channel (ramping, like a fader move) without moving its fader, undoably and saved with it. */
+    bool isMuted() const noexcept                           { return muted.get(); }
+    void setMuted (bool shouldBeMuted)                      { muted = shouldBeMuted; }
+
     bool shouldMeasureCpuUsage() const noexcept final       { return false; }
 
     //==============================================================================
@@ -75,7 +79,7 @@ public:
 
     //==============================================================================
     juce::CachedValue<float> volume, pan, trim, width;
-    juce::CachedValue<bool> applyToMidi, ignoreVca, polarity, mono;
+    juce::CachedValue<bool> applyToMidi, ignoreVca, polarity, mono, muted;
     juce::CachedValue<int> panLaw;
 
     // NB the units used here are slider position

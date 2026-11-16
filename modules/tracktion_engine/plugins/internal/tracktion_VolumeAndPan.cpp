@@ -162,6 +162,7 @@ VolumeAndPanPlugin::VolumeAndPanPlugin (PluginCreationInfo info, bool isMasterVo
     trim.referTo (state, IDs::trim, um);
     width.referTo (state, IDs::width, um, 1.0f);
     mono.referTo (state, IDs::mono, um);
+    muted.referTo (state, IDs::mute, um);
 
     if (isMasterVolumeNode)
     {
@@ -274,8 +275,8 @@ void VolumeAndPanPlugin::setSmoothedValueTargets (TimePosition time, bool update
     float gainL, gainR;
     getGainsFromVolumeFaderPositionAndPan (sliderPos, getPan(), getPanLaw(), gainL, gainR);
 
-    // The trim goes on top of the fader, and polarity inverts the whole channel
-    auto trimGain = juce::Decibels::decibelsToGain (getTrimDb());
+    // The trim goes on top of the fader, polarity inverts the whole channel, and muting silences it
+    auto trimGain = muted ? 0.0f : juce::Decibels::decibelsToGain (getTrimDb());
 
     if (polarity)
         trimGain = -trimGain;
@@ -429,7 +430,7 @@ void VolumeAndPanPlugin::muteOrUnmute()
 
 void VolumeAndPanPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v)
 {
-    copyPropertiesToCachedValues (v, volume, pan, panLaw, applyToMidi, ignoreVca, polarity, trim, width, mono);
+    copyPropertiesToCachedValues (v, volume, pan, panLaw, applyToMidi, ignoreVca, polarity, trim, width, mono, muted);
 
     for (auto p : getAutomatableParameters())
         p->updateFromAttachedValue();
