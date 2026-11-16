@@ -62,6 +62,32 @@ public:
 
     void setSoundMedia (int index, const juce::String& sourcePathOrProjectID);
 
+    /** A sound's tuning in semitones (fractions too), on top of the pitch its key note sets. */
+    float getSoundPitch (int index) const;
+    void setSoundPitch (int index, float semitones);
+
+    static constexpr float maxPitchSemitones = 48.0f;
+
+    /** A number that names a sound for as long as it's in the sampler, whatever is added or
+        removed around it; its parameters' ids are made from it.
+    */
+    int getSoundID (int index) const;
+
+    /** A sound's automatable gain (dB), pan (-1 to 1) and pitch (semitones), which play
+        the sound's own settings until they're automated or modulated. They're made and
+        deleted with the sound (on the message thread, as the sounds update), and their ids,
+        "sound<id> gain", "sound<id> pan" and "sound<id> pitch", come from its getSoundID(),
+        so their automation stays with it. Removing a sound removes its automation too.
+        Playing notes follow them block by block.
+    */
+    struct SoundParameters
+    {
+        AutomatableParameter::Ptr gain, pan, pitch;
+    };
+
+    /** Brings the sounds and their parameters up to date first, like flushPendingUpdates(). */
+    SoundParameters getSoundParameters (int index);
+
     void playNotes (const juce::BigInteger& keysDown);
     void allNotesOff();
 
@@ -114,8 +140,9 @@ public:
         bool openEnded = false;
         int chokeGroup = 0;
         double attackSeconds = 0, releaseSeconds = 0;
-        float gainDb = 0, pan = 0;
+        float gainDb = 0, pan = 0, pitch = 0;
         double startTime = 0, length = 0;
+        SoundParameters parameters;
         AudioFile audioFile;
         juce::AudioBuffer<float> audioData { 2, 64 };
 
@@ -133,10 +160,19 @@ private:
     juce::OwnedArray<SamplerSound> soundList;
     juce::BigInteger highlightedNotes;
 
+    struct SoundParameterSet;
+    std::vector<std::unique_ptr<SoundParameterSet>> soundParameters;
+    bool soundsUnchanged = false; // set while a change to the state leaves the sounds as they are
+
     juce::ValueTree getSound (int index) const;
     void chokeOtherSounds (const SamplerSound&, int sampleInBlock);
+    void updateSoundParameters();
+    bool isSoundStructureChange (const juce::ValueTree& parent, const juce::ValueTree& child) const;
 
     void valueTreeChanged() override;
+    void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
+    void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override;
+    void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override;
     void handleAsyncUpdate() override;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SamplerPlugin)
