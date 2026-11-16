@@ -689,14 +689,12 @@ ExternalPlugin::ExternalPlugin (PluginCreationInfo info)  : Plugin (info)
 
     auto um = getUndoManager();
 
-    dryGain = new PluginWetDryAutomatableParam ("dry level", TRANS("Dry Level"), *this);
-    wetGain = new PluginWetDryAutomatableParam ("wet level", TRANS("Wet Level"), *this);
+    mixParam = new PluginWetDryAutomatableParam ("wet dry mix", TRANS("Wet/Dry Mix"), *this);
 
-    dryValue.referTo (state, IDs::dry, um);
-    wetValue.referTo (state, IDs::wet, um, 1.0f);
-
-    dryGain->attachToCurrentValue (dryValue);
-    wetGain->attachToCurrentValue (wetValue);
+    // Edits without a mix kept separate dry and wet levels (1 wet, 0 dry by default)
+    mixValue.referTo (state, IDs::mix, um, getMixForLevels (state.getProperty (IDs::dry, 0.0f),
+                                                           state.getProperty (IDs::wet, 1.0f)));
+    mixParam->attachToCurrentValue (mixValue);
 
     desc.uniqueId = (int) state[IDs::uniqueId].toString().getHexValue64();
     desc.deprecatedUid = (int) state[IDs::uid].toString().getHexValue64();
@@ -707,6 +705,13 @@ ExternalPlugin::ExternalPlugin (PluginCreationInfo info)  : Plugin (info)
     identiferString = createIdentifierString (desc);
 
     initialiseFully();
+}
+
+float ExternalPlugin::getMixForLevels (float dry, float wet)
+{
+    dry = std::max (0.0f, dry);
+    wet = std::max (0.0f, wet);
+    return dry + wet > 0.0f ? juce::jlimit (0.0f, 1.0f, wet / (dry + wet)) : 1.0f;
 }
 
 juce::ValueTree ExternalPlugin::create (Engine&, const juce::PluginDescription& desc)
@@ -791,8 +796,7 @@ void ExternalPlugin::buildParameterList()
     clearParameterList();
     std::unordered_map<std::string, int> alreadyUsedParamNames;
 
-    addAutomatableParameter (dryGain);
-    addAutomatableParameter (wetGain);
+    addAutomatableParameter (mixParam);
 
     if (auto pi = getAudioPluginInstance())
     {
@@ -1049,8 +1053,7 @@ ExternalPlugin::~ExternalPlugin()
     windowState->hideWindowForShutdown();
     deinitialise();
 
-    dryGain->detachFromCurrentValue();
-    wetGain->detachFromCurrentValue();
+    mixParam->detachFromCurrentValue();
 
     deletePluginInstance();
 }
@@ -1747,8 +1750,8 @@ void ExternalPlugin::processPluginBlock (juce::AudioPluginInstance& pluginInstan
     juce::AudioBuffer<float> asb (fc.destBuffer->getArrayOfWritePointers(), fc.destBuffer->getNumChannels(),
                                   fc.bufferStartSample, fc.bufferNumSamples);
 
-    auto dry = dryGain->getCurrentValue();
-    auto wet = wetGain->getCurrentValue();
+    auto wet = juce::jlimit (0.0f, 1.0f, mixParam->getCurrentValue());
+    auto dry = 1.0f - wet;
 
     if (dry <= 0.00004f)
     {
@@ -2462,12 +2465,12 @@ PluginWetDryAutomatableParam::~PluginWetDryAutomatableParam()
 
 juce::String PluginWetDryAutomatableParam::valueToString (float value)
 {
-    return juce::Decibels::toString (juce::Decibels::gainToDecibels (value), 1);
+    return juce::String (juce::roundToInt (value * 100.0f)) + "%";
 }
 
 float PluginWetDryAutomatableParam::stringToValue (const juce::String& s)
 {
-    return juce::Decibels::decibelsToGain (dbStringToDb (s));
+    return juce::jlimit (0.0f, 1.0f, s.retainCharacters ("0123456789.-").getFloatValue() / 100.0f);
 }
 
 } // namespace tracktion::inline engine

@@ -124,7 +124,7 @@ public:
     juce::String getPluginType() override   { return xmlTypeName; }
     bool isSynth() override                 { return desc.isInstrument; }
     bool takesMidiInput() override;
-    bool takesAudioInput() override         { return (! isSynth()) || (dryGain->getCurrentValue() > 0.0f); }
+    bool takesAudioInput() override         { return (! isSynth()) || (mixParam->getCurrentValue() < 1.0f); }
     bool isMissing() override;
     bool isDisabled() override;
     double getLatencySeconds() override     { return latencySeconds; }
@@ -200,9 +200,17 @@ public:
     /** The plugin's description (format, name, manufacturer, file path, etc.). */
     juce::PluginDescription desc;
 
-    /** Dry/wet mix values and their automatable parameters. */
-    juce::CachedValue<float> dryValue, wetValue;
-    AutomatableParameter::Ptr dryGain, wetGain;
+    /** The wet/dry mix and its automatable parameter: from 0 (only the input, dry) to 1
+        (only the plugin's output, wet). The output plays at the mix and the input at 1 - mix.
+
+        Edits saved with separate dry and wet levels load with the mix they make,
+        wet / (wet + dry), which sounds the same wherever the two add up to 1.
+    */
+    juce::CachedValue<float> mixValue;
+    AutomatableParameter::Ptr mixParam;
+
+    /** The mix that separate dry and wet levels make, as older edits stored them. */
+    static float getMixForLevels (float dry, float wet);
 
     ActiveNoteList getActiveNotes() const           { return activeNotes; }
 
@@ -303,8 +311,8 @@ private:
 };
 
 //==============================================================================
-/** Specialised AutomatableParameter for wet/dry.
-    Having a subclass just lets it label itself more nicely.
+/** Specialised AutomatableParameter for the wet/dry mix.
+    Having a subclass just lets it label itself more nicely, as a percentage.
  */
 struct PluginWetDryAutomatableParam  : public AutomatableParameter
 {
