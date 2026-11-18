@@ -472,6 +472,9 @@ void SamplerPlugin::handleAsyncUpdate()
             s->pan          = juce::jlimit (-1.0f, 1.0f, static_cast<float> (v[IDs::pan]));
             s->openEnded    = v[IDs::openEnded];
             s->chokeGroup   = juce::jlimit (0, maxChokeGroup, static_cast<int> (v[IDs::chokeGroup]));
+            s->minVelocity  = juce::jlimit (1, 127, static_cast<int> (v.getProperty (IDs::minVelocity, 1)));
+            s->maxVelocity  = juce::jlimit (s->minVelocity, 127, static_cast<int> (v.getProperty (IDs::maxVelocity, 127)));
+            s->roundRobin   = juce::jlimit (0, maxRoundRobin, static_cast<int> (v[IDs::roundRobin]));
             s->attackSeconds  = juce::jlimit (0.0, maxAttackSeconds, static_cast<double> (v[IDs::attack]));
             s->releaseSeconds = juce::jlimit (0.0, maxReleaseSeconds, static_cast<double> (v[IDs::release]));
             s->pitch        = juce::jlimit (-maxPitchSemitones, maxPitchSemitones, static_cast<float> (v[IDs::pitch]));
@@ -516,6 +519,7 @@ void SamplerPlugin::initialise (const PluginInitialisationInfo&)
 {
     const juce::ScopedLock sl (lock);
     allNotesOff();
+    roundRobinTurns = {};
 }
 
 void SamplerPlugin::deinitialise()
@@ -524,6 +528,44 @@ void SamplerPlugin::deinitialise()
 }
 
 //==============================================================================
+template <typename Fn>
+void SamplerPlugin::forEachSoundToPlay (int note, int velocity, Fn&& fn)
+{
+    // Sounds without audio (missing or still loading) don't take a turn
+    auto plays = [note, velocity] (const SamplerSound& ss)
+    {
+        return ss.minNote <= note && ss.maxNote >= note
+            && ss.minVelocity <= velocity && ss.maxVelocity >= velocity
+            && ss.audioData.getNumSamples() > 0;
+    };
+
+    auto& turns = roundRobinTurns;
+    const auto key = (size_t) juce::jlimit (0, 127, note);
+
+    // How many sounds each round robin has for this note, so the turn picks one of them
+    std::array<int, maxRoundRobin + 1> candidates {}, seen {};
+
+    for (auto ss : soundList)
+        if (ss->roundRobin > 0 && plays (*ss))
+            ++candidates[(size_t) ss->roundRobin];
+
+    for (auto ss : soundList)
+    {
+        if (! plays (*ss))
+            continue;
+
+        if (const auto group = (size_t) ss->roundRobin; group > 0)
+            if ((uint32_t) seen[group]++ != turns[group][key] % (uint32_t) candidates[group])
+                continue;
+
+        fn (*ss);
+    }
+
+    for (size_t group = 1; group < candidates.size(); ++group)
+        if (candidates[group] > 0)
+            ++turns[group][key];
+}
+
 void SamplerPlugin::playNotes (const juce::BigInteger& keysDown)
 {
     const juce::ScopedLock sl (lock);
@@ -540,28 +582,28 @@ void SamplerPlugin::playNotes (const juce::BigInteger& keysDown)
         {
             if (keysDown [note] && ! highlightedNotes [note])
             {
-                for (auto ss : soundList)
+                constexpr float velocity = 0.75f;
+
+                forEachSoundToPlay (note, juce::roundToInt (velocity * 127.0f), [&] (SamplerSound& ss)
                 {
-                    if (ss->minNote <= note
-                         && ss->maxNote >= note
-                         && ss->audioData.getNumSamples() > 0
-                         && (! ss->audioFile.isNull())
+                    if (ss.audioData.getNumSamples() > 0
+                         && (! ss.audioFile.isNull())
                          && playingNotes.size() < maximumSimultaneousNotes)
                     {
-                        chokeOtherSounds (*ss, 0);
+                        chokeOtherSounds (ss, 0);
 
                         playingNotes.add (new SampledNote (note,
-                                                           ss->keyNote,
-                                                           0.75f,
-                                                           ss->audioFile,
+                                                           ss.keyNote,
+                                                           velocity,
+                                                           ss.audioFile,
                                                            sampleRate,
                                                            0,
-                                                           ss->audioData,
-                                                           ss->fileLengthSamples,
-                                                           ss->openEnded,
-                                                           *ss));
+                                                           ss.audioData,
+                                                           ss.fileLengthSamples,
+                                                           ss.openEnded,
+                                                           ss));
                     }
-                }
+                });
             }
         }
 
@@ -622,28 +664,26 @@ void SamplerPlugin::applyToBuffer (const PluginRenderContext& fc)
                         }
                     }
 
-                    for (auto ss : soundList)
+                    forEachSoundToPlay (note, std::max (1, (int) m.getVelocity()), [&] (SamplerSound& ss)
                     {
-                        if (ss->minNote <= note
-                            && ss->maxNote >= note
-                            && ss->audioData.getNumSamples() > 0
+                        if (ss.audioData.getNumSamples() > 0
                             && playingNotes.size() < maximumSimultaneousNotes)
                         {
                             highlightedNotes.setBit (note);
-                            chokeOtherSounds (*ss, noteTimeSample);
+                            chokeOtherSounds (ss, noteTimeSample);
 
                             playingNotes.add (new SampledNote (note,
-                                                               ss->keyNote,
+                                                               ss.keyNote,
                                                                m.getVelocity() / 127.0f,
-                                                               ss->audioFile,
+                                                               ss.audioFile,
                                                                sampleRate,
                                                                noteTimeSample,
-                                                               ss->audioData,
-                                                               ss->fileLengthSamples,
-                                                               ss->openEnded,
-                                                               *ss));
+                                                               ss.audioData,
+                                                               ss.fileLengthSamples,
+                                                               ss.openEnded,
+                                                               ss));
                         }
-                    }
+                    });
                 }
                 else if (m.isNoteOff())
                 {
@@ -750,6 +790,10 @@ bool SamplerPlugin::isSoundOpenEnded (int index) const      { return getSound (i
 int SamplerPlugin::getSoundChokeGroup (int index) const     { return getSound (index)[IDs::chokeGroup]; }
 double SamplerPlugin::getSoundAttack (int index) const      { return getSound (index)[IDs::attack]; }
 double SamplerPlugin::getSoundRelease (int index) const     { return getSound (index)[IDs::release]; }
+// As the sounds play them: a range that's back to front plays its lowest velocity only
+int SamplerPlugin::getSoundMinVelocity (int index) const    { return juce::jlimit (1, 127, static_cast<int> (getSound (index).getProperty (IDs::minVelocity, 1))); }
+int SamplerPlugin::getSoundMaxVelocity (int index) const    { return juce::jlimit (getSoundMinVelocity (index), 127, static_cast<int> (getSound (index).getProperty (IDs::maxVelocity, 127))); }
+int SamplerPlugin::getSoundRoundRobin (int index) const     { return juce::jlimit (0, maxRoundRobin, static_cast<int> (getSound (index)[IDs::roundRobin])); }
 
 double SamplerPlugin::getSoundLength (int index) const
 {
@@ -869,6 +913,20 @@ void SamplerPlugin::setSoundOpenEnded (int index, bool b)
 void SamplerPlugin::setSoundChokeGroup (int index, int chokeGroup)
 {
     getSound (index).setProperty (IDs::chokeGroup, juce::jlimit (0, maxChokeGroup, chokeGroup), getUndoManager());
+}
+
+void SamplerPlugin::setSoundVelocityRange (int index, int minVelocity, int maxVelocity)
+{
+    auto um = getUndoManager();
+
+    auto v = getSound (index);
+    v.setProperty (IDs::minVelocity, juce::jlimit (1, 127, std::min (minVelocity, maxVelocity)), um);
+    v.setProperty (IDs::maxVelocity, juce::jlimit (1, 127, std::max (minVelocity, maxVelocity)), um);
+}
+
+void SamplerPlugin::setSoundRoundRobin (int index, int roundRobin)
+{
+    getSound (index).setProperty (IDs::roundRobin, juce::jlimit (0, maxRoundRobin, roundRobin), getUndoManager());
 }
 
 void SamplerPlugin::setSoundEnvelope (int index, double attackSeconds, double releaseSeconds)

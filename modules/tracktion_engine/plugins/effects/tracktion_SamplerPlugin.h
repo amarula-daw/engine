@@ -56,6 +56,24 @@ public:
     */
     void setSoundEnvelope (int index, double attackSeconds, double releaseSeconds);
 
+    /** The velocities a sound plays for (1 to 127, both included), so a note can play a
+        soft sample when it's played softly and a hard one when it's played hard.
+        Sounds play every velocity until this is set.
+    */
+    void setSoundVelocityRange (int index, int minVelocity, int maxVelocity);
+    int getSoundMinVelocity (int index) const;
+    int getSoundMaxVelocity (int index) const;
+
+    /** Puts a sound in a round robin (1 to maxRoundRobin), or none (0). Of the sounds in a
+        round robin that a note would play, only one does, each in turn, so a repeated
+        note doesn't sound the same every time. Each note takes its own turns, so give
+        each velocity layer a round robin of its own. The turns start again from the first
+        sound whenever the sampler is initialised, so renders sound the same each time.
+    */
+    void setSoundRoundRobin (int index, int roundRobin);
+    int getSoundRoundRobin (int index) const;
+
+    static constexpr int maxRoundRobin = 16;
     static constexpr int maxChokeGroup = 16;
     static constexpr double maxAttackSeconds = 2.0;
     static constexpr double maxReleaseSeconds = 5.0;
@@ -139,6 +157,7 @@ public:
         int fileStartSample = 0, fileLengthSamples = 0;
         bool openEnded = false;
         int chokeGroup = 0;
+        int minVelocity = 1, maxVelocity = 127, roundRobin = 0;
         double attackSeconds = 0, releaseSeconds = 0;
         float gainDb = 0, pan = 0, pitch = 0;
         double startTime = 0, length = 0;
@@ -159,6 +178,7 @@ private:
     juce::ReferenceCountedArray<SampledNote> playingNotes;
     juce::OwnedArray<SamplerSound> soundList;
     juce::BigInteger highlightedNotes;
+    std::array<std::array<uint32_t, 128>, maxRoundRobin + 1> roundRobinTurns {}; // by round robin, then note
 
     struct SoundParameterSet;
     std::vector<std::unique_ptr<SoundParameterSet>> soundParameters;
@@ -166,6 +186,12 @@ private:
 
     juce::ValueTree getSound (int index) const;
     void chokeOtherSounds (const SamplerSound&, int sampleInBlock);
+
+    /** Calls fn for each sound a note plays: those whose keys and velocities include it,
+        taking one turn from each round robin. Called with the lock held.
+    */
+    template <typename Fn>
+    void forEachSoundToPlay (int note, int velocity, Fn&& fn);
     void updateSoundParameters();
     bool isSoundStructureChange (const juce::ValueTree& parent, const juce::ValueTree& child) const;
 
