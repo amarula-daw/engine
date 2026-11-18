@@ -2547,6 +2547,7 @@ void AudioClipBase::timerCallback()
         }
 
         // poll until the proxy is ready..
+        waitingForProxy = true;
         startTimer (100);
         return;
     }
@@ -2556,7 +2557,11 @@ void AudioClipBase::timerCallback()
         edit.engine.getAudioFileManager().releaseFile (newProxy);
 
     Selectable::changed();
-    edit.restartPlayback();
+
+    // Playback is already using this file unless it's new or has just been rendered,
+    // so a change that leaves it alone (a rename, a move) doesn't rebuild the graph again
+    if (proxyChanged || std::exchange (waitingForProxy, false))
+        edit.restartPlayback();
 }
 
 void AudioClipBase::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id)

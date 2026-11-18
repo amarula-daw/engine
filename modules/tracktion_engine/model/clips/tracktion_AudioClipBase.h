@@ -763,6 +763,7 @@ protected:
 
     RenderManager::Job::Ptr renderJob;
     AudioFile lastProxy;
+    bool waitingForProxy = false; // polling for a proxy being rendered, which playback switches to once it's there
 
     //==============================================================================
     /** Triggers a source or proxy render after a timeout. Call this if something changes that
