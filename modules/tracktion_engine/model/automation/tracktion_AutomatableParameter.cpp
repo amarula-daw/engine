@@ -875,6 +875,10 @@ private:
 };
 
 //==============================================================================
+/** Keeps a parameter's stored value in step with it. It stores the base value (where the
+    parameter is set, or where its curve has it) and never what Modifiers add on top: that
+    changes every block, and stored it would be saved, undone and read back as the setting.
+*/
 struct AutomatableParameter::AttachedValue  : public juce::AsyncUpdater
 {
     AttachedValue (AutomatableParameter& p)
@@ -900,7 +904,7 @@ struct AutomatableParameter::AttachedFloatValue : public AutomatableParameter::A
         parameter.setParameter (value, juce::dontSendNotification);
     }
 
-    void handleAsyncUpdate() override               { value.setValue (parameter.currentValue, nullptr); }
+    void handleAsyncUpdate() override               { value.setValue (parameter.currentBaseValue, nullptr); }
     float getValue() override                       { return value; }
     void setValue (float v) override                { value = v; }
     float getDefault() override                     { return value.getDefault(); }
@@ -932,7 +936,7 @@ struct AutomatableParameter::AttachedIntValue : public AutomatableParameter::Att
         parameter.setParameter ((float) value.get(), juce::dontSendNotification);
     }
 
-    void handleAsyncUpdate() override               { value.setValue (juce::roundToInt (parameter.getCurrentValue()), nullptr); }
+    void handleAsyncUpdate() override               { value.setValue (juce::roundToInt (parameter.getCurrentBaseValue()), nullptr); }
     float getValue() override                       { return (float) value.get(); }
     void setValue (float v) override                { value = juce::roundToInt (v); }
     float getDefault() override                     { return (float) value.getDefault(); }
@@ -964,7 +968,7 @@ struct AutomatableParameter::AttachedBoolValue : public AutomatableParameter::At
         parameter.setParameter (value.get() ? 1.0f : 0.0f, juce::dontSendNotification);
     }
 
-    void handleAsyncUpdate() override                     { value.setValue (parameter.currentValue != 0.0f, nullptr); }
+    void handleAsyncUpdate() override                     { value.setValue (parameter.currentBaseValue != 0.0f, nullptr); }
     float getValue() override                             { return value; }
     void setValue (float v) override                      { value = v != 0 ? true : false; }
     float getDefault() override                           { return value.getDefault() ? 1.0f : 0.0f; }
@@ -1491,7 +1495,7 @@ void AutomatableParameter::setParameter (float value, juce::NotificationType nt)
 
         if (attachedValue != nullptr)
         {
-            // Updates the ValueTree via the CachedValue to the current parameter value synchronously
+            // Updates the ValueTree via the CachedValue to the current base value synchronously
             attachedValue->handleAsyncUpdate();
         }
     }
