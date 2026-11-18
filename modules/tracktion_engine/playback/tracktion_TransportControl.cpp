@@ -602,7 +602,11 @@ struct TransportControl::PlayHeadWrapper
         if (getNodePlayHead() != nullptr && transport.playbackContext != nullptr && transport.playbackContext->isPlaybackGraphAllocated())
             return transport.playbackContext->getAudibleTimelineTime();
 
-        return getPosition();
+        // Without a graph, this still reports a requested position the playhead hasn't reached yet
+        if (getNodePlayHead() != nullptr)
+            return transport.playbackContext->getPosition();
+
+        return {};
     }
 
     TimePosition getPosition() const
