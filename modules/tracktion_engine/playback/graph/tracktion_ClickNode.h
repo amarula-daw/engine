@@ -49,15 +49,19 @@ private:
     juce::AudioBuffer<float> bigClick, littleClick;
     int bigClickMidiNote = 37, littleClickMidiNote = 76;
 
+    /** Subdivision clicks between the beats play the little click this much quieter. */
+    static constexpr float subdivisionGain = 0.5f;
+
     //==============================================================================
     bool isPlaying();
-    void trigger (juce::AudioBuffer<float>*);
+    void trigger (juce::AudioBuffer<float>*, float gain);
     void render (choc::buffer::ChannelArrayView<float>&);
     void reset();
     int samplesRemaining();
 
     juce::AudioBuffer<float>* currentSample = nullptr;
     int samplePos = -1;
+    float currentGain = 1.0f;
 
     //==============================================================================
     bool isMutedAtTime (TimePosition) const;

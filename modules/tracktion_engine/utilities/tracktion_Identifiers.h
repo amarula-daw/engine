@@ -52,6 +52,7 @@ namespace IDs
     DECLARE_ID (active)
     DECLARE_ID (emphasiseBars)
     DECLARE_ID (onlyRecording)
+    DECLARE_ID (subdivisions)
     DECLARE_ID (outputDevice)
     DECLARE_ID (bus)
     DECLARE_ID (CONTROLLERMAPPINGS)

@@ -1010,6 +1010,7 @@ void Edit::initialiseClickTrack()
     clickTrackEnabled.referTo (click, IDs::active, nullptr);
     clickTrackEmphasiseBars.referTo (click, IDs::emphasiseBars, nullptr);
     clickTrackRecordingOnly.referTo (click, IDs::onlyRecording, nullptr);
+    clickTrackSubdivisions.referTo (click, IDs::subdivisions, nullptr, 1);
 
     clickTrackDevice.referTo (click, IDs::outputDevice, nullptr);
 }
@@ -2508,7 +2509,7 @@ void Edit::setClickTrackOutput (const juce::String& deviceName)
 
 void Edit::setClickTrackVolume (float gain)
 {
-    clickTrackGain = juce::jlimit (0.2f, 1.0f, gain);
+    clickTrackGain = juce::jlimit (0.0f, 1.0f, gain);
     engine.getPropertyStorage().setProperty (SettingID::lastClickTrackLevel, gain);
 }
 

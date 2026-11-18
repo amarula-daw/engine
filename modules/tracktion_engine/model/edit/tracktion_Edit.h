@@ -693,7 +693,13 @@ public:
     TimeRange getClickTrackRange() const noexcept;
 
     /** Returns the click track volume. */
-    float getClickTrackVolume() const noexcept              { return juce::jlimit (0.2f, 1.0f, clickTrackGain.get()); }
+    float getClickTrackVolume() const noexcept              { return juce::jlimit (0.0f, 1.0f, clickTrackGain.get()); }
+
+    /** Returns how many times the click track clicks per beat: 1 for the beats only, 2 for every
+        half beat, 3 for triplets, 4 for every quarter beat and so on. The clicks between the beats
+        are quieter, and a count-in with the click track off clicks the beats only.
+    */
+    int getClickTrackSubdivisions() const noexcept          { return juce::jlimit (1, 16, clickTrackSubdivisions.get()); }
 
     /** Returns the name of the device being used as the click track output. */
     juce::String getClickTrackDevice() const;
@@ -887,6 +893,7 @@ public:
                             alwaysUseRelativePaths;             ///< Whether clip source paths should always be stored as relative.
 
     juce::CachedValue<float> clickTrackGain;        ///< The gain of the click track.
+    juce::CachedValue<int> clickTrackSubdivisions;  ///< How many times the click track clicks per beat (see getClickTrackSubdivisions).
     juce::CachedValue<ProjectItemRef> videoSource;   ///< The ProjectItemRef of the video source.
 
     juce::ValueTree state { IDs::EDIT };     ///< The ValueTree of the Edit state.

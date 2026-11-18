@@ -106,20 +106,25 @@ void ClickGenerator::prepareToPlay (double newSampleRate, TimePosition startTime
 
 namespace
 {
-    struct BeatInfo
+    struct ClickInfo
     {
         TimePosition time;
         bool isFirstBeatOfBar = false;
+        bool isSubdivision = false;
     };
 
-    inline BeatInfo getBeatInfo (const tempo::Sequence& sequence, tempo::Sequence::Position& tempoPosition)
+    /** The click with the given index, counting clicksPerBeat clicks per beat from beat 0. */
+    inline ClickInfo getClickInfo (const tempo::Sequence& sequence, tempo::Sequence::Position& tempoPosition,
+                                   int64_t clickIndex, int clicksPerBeat)
     {
-        const auto beats = tempoPosition.getBeats().inBeats();
-        int beat = static_cast<int> (std::floor (beats));
-        const auto beatTime = sequence.toTime (BeatPosition::fromBeats (beat));
-        const bool isFirstBeatOfBar = tempoPosition.getBarsBeats().getWholeBeats() == 0;
+        const auto beat = static_cast<double> (clickIndex) / clicksPerBeat;
+        const bool isSubdivision = (clickIndex % clicksPerBeat) != 0;
 
-        return { beatTime, isFirstBeatOfBar };
+        // Look up the bar half way to the next click so a beat landing exactly on a bar line isn't rounded into the previous bar
+        tempoPosition.set (BeatPosition::fromBeats (beat + 0.5 / clicksPerBeat));
+        const bool isFirstBeatOfBar = ! isSubdivision && tempoPosition.getBarsBeats().getWholeBeats() == 0;
+
+        return { sequence.toTime (BeatPosition::fromBeats (beat)), isFirstBeatOfBar, isSubdivision };
     }
 }
 
@@ -132,8 +137,12 @@ void ClickGenerator::processBlock (choc::buffer::ChannelArrayView<float>* destBu
 
     const bool emphasis = edit.clickTrackEmphasiseBars;
 
+    // With the click track off, only the count-in clicks, and that clicks the beats only
+    const int clicksPerBeat = edit.clickTrackEnabled.get() ? edit.getClickTrackSubdivisions() : 1;
+
     tempoPosition.set (editTime.getStart());
-    auto beatInfo = getBeatInfo (sequence, tempoPosition);
+    auto clickIndex = static_cast<int64_t> (std::floor (tempoPosition.getBeats().inBeats() * clicksPerBeat));
+    auto clickInfo = getClickInfo (sequence, tempoPosition, clickIndex, clicksPerBeat);
 
     if (midi)
     {
@@ -141,21 +150,20 @@ void ClickGenerator::processBlock (choc::buffer::ChannelArrayView<float>* destBu
             return;
 
         auto gain = edit.getClickTrackVolume();
-        auto t = beatInfo.time;
+        auto t = clickInfo.time;
 
         while (t < editTime.getEnd())
         {
-            auto note = (emphasis && beatInfo.isFirstBeatOfBar) ? bigClickMidiNote
-                                                                : littleClickMidiNote;
+            auto note = (emphasis && clickInfo.isFirstBeatOfBar) ? bigClickMidiNote
+                                                                 : littleClickMidiNote;
 
             if (t >= editTime.getStart())
-                bufferForMidiMessages->addMidiMessage (juce::MidiMessage::noteOn (10, note, gain),
+                bufferForMidiMessages->addMidiMessage (juce::MidiMessage::noteOn (10, note, clickInfo.isSubdivision ? gain * subdivisionGain : gain),
                                                        (t - editTime.getStart()).inSeconds(),
                                                        {});
 
-            tempoPosition.add (1_bd);
-            beatInfo = getBeatInfo (sequence, tempoPosition);
-            t = beatInfo.time;
+            clickInfo = getClickInfo (sequence, tempoPosition, ++clickIndex, clicksPerBeat);
+            t = clickInfo.time;
         }
     }
     else
@@ -171,19 +179,19 @@ void ClickGenerator::processBlock (choc::buffer::ChannelArrayView<float>* destBu
             render (dstView);
         }
 
-        auto t = beatInfo.time;
+        auto t = clickInfo.time;
 
         while (t < editTime.getEnd())
         {
-            auto b = (emphasis && beatInfo.isFirstBeatOfBar) ? &bigClick : &littleClick;
+            auto b = (emphasis && clickInfo.isFirstBeatOfBar) ? &bigClick : &littleClick;
 
             if (b->getNumSamples() > 0 && t >= editTime.getStart() && ! isMutedAtTime (t))
             {
                 const auto clickStartTime = t - editTime.getStart();
                 const auto clickStartOffset = static_cast<int> (toSamples (clickStartTime, sampleRate));
+                const auto gain = edit.getClickTrackVolume() * (clickInfo.isSubdivision ? subdivisionGain : 1.0f);
 
-                trigger (b);
-                isMutedAtTime (t);
+                trigger (b, gain);
 
                 auto num = std::min (samplesRemaining(), int (destBuffer->getNumFrames()) - int (clickStartOffset));
                 auto dstView = destBuffer->getFrameRange ({ choc::buffer::FrameCount (clickStartOffset), choc::buffer::FrameCount (clickStartOffset + num) });
@@ -191,9 +199,8 @@ void ClickGenerator::processBlock (choc::buffer::ChannelArrayView<float>* destBu
                 render (dstView);
             }
 
-            tempoPosition.add (1_bd);
-            beatInfo = getBeatInfo (sequence, tempoPosition);
-            t = beatInfo.time;
+            clickInfo = getClickInfo (sequence, tempoPosition, ++clickIndex, clicksPerBeat);
+            t = clickInfo.time;
         }
     }
 }
@@ -220,10 +227,11 @@ bool ClickGenerator::isPlaying()
     return currentSample != nullptr && samplePos >= 0;
 }
 
-void ClickGenerator::trigger (juce::AudioBuffer<float>* s)
+void ClickGenerator::trigger (juce::AudioBuffer<float>* s, float gain)
 {
     currentSample = s;
     samplePos = 0;
+    currentGain = gain;
 }
 
 int ClickGenerator::samplesRemaining()
@@ -234,10 +242,9 @@ int ClickGenerator::samplesRemaining()
 void ClickGenerator::render (choc::buffer::ChannelArrayView<float>& view)
 {
     auto todo = view.getNumFrames();
-    auto gain = edit.getClickTrackVolume();
 
     copyRemappingChannels (view, toBufferView (*currentSample).getFrameRange ({ choc::buffer::FrameCount (samplePos), choc::buffer::FrameCount (samplePos) + todo }));
-    applyGain (view, gain);
+    applyGain (view, currentGain);
 
     samplePos += static_cast<int> (todo);
     if (samplePos >= currentSample->getNumSamples())
