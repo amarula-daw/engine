@@ -569,6 +569,13 @@ void CompManager::addOrRemoveListenerIfNeeded()
 
 void CompManager::valueTreePropertyChanged (juce::ValueTree& tree, const juce::Identifier& id)
 {
+    // A take's file has moved (e.g. relinked), so a comp of it renders again
+    if (tree.getParent() == takesTree && id == IDs::source && ! isTakeComp (tree))
+    {
+        triggerCompRender();
+        return;
+    }
+
     if (tree != clip.state)
         return;
 
@@ -987,6 +994,17 @@ ProjectItemRef WaveCompManager::getProjectItemRefForTake (int takeIndex) const
     return clip.getTakes()[takeIndex];
 }
 
+HashCode WaveCompManager::getBaseTakeHash (int takeIndex) const
+{
+    // The takes' sources too, so a comp of a take whose file has moved isn't taken for its old render
+    auto s = getProjectItemRefForTake (takeIndex).toString();
+
+    for (int i = 0; i < getNumTakes(); ++i)
+        s << "|" << getProjectItemRefForTake (i).toString();
+
+    return s.hashCode64();
+}
+
 AudioFile WaveCompManager::getSourceFileForTake (int takeIndex) const
 {
     // A take's source can be a ProjectItemID or a file path, like a clip's
@@ -1143,7 +1161,9 @@ bool WaveCompManager::renderTake (CompRenderContext& context, Edit& edit, AudioF
         auto takeIndex = (int) compSegment.getProperty (IDs::takeIndex);
         auto endTime = double (compSegment.getProperty (IDs::endTime)) / timeRatio;
 
-        if (juce::isPositiveAndBelow (takeIndex, context.takeFiles.size()))
+        // A take whose file is missing leaves its part silent (a reader the engine still has open could read it)
+        if (juce::isPositiveAndBelow (takeIndex, context.takeFiles.size())
+            && context.takeFiles[takeIndex].existsAsFile())
         {
             auto takeFile = AudioFile (context.engine, context.takeFiles[takeIndex]);
 

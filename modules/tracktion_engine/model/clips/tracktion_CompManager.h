@@ -256,7 +256,7 @@ public:
     juce::File getCurrentCompFile() const;
 
     //==============================================================================
-    HashCode getBaseTakeHash (int takeIndex) const override    { return getProjectItemRefForTake (takeIndex).toString().hashCode64(); }
+    HashCode getBaseTakeHash (int takeIndex) const override;
     double getTakeLength (int takeIndex) const override;
     double getOffset() const override;
     double getLoopLength() const override;
