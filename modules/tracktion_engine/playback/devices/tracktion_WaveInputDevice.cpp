@@ -1019,7 +1019,9 @@ public:
         {
             afm.releaseFile (recordedFile);
             tempFile.moveFileTo (recordedFile.getFile());
-            filesCreated.add (recordedFile.getFile());
+            // Already listed by the caller: adding it again would make it a second, duplicate take
+            // (and a single pass, two takes) in Edits without a project.
+            filesCreated.addIfNotAlreadyThere (recordedFile.getFile());
             afm.forceFileUpdate (recordedFile);
 
             if (projectItem != nullptr)
