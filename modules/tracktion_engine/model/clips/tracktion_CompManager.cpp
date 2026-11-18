@@ -628,16 +628,16 @@ void CompFactory::removeComp (CompManager& cm)
 //==============================================================================
 struct WaveCompManager::CompRenderContext
 {
-    CompRenderContext (Engine& e, const juce::Array<ProjectItemRef> takesRefs_, const juce::ValueTree& takeTree_, int activeTakeIndex_,
+    CompRenderContext (Engine& e, const juce::Array<juce::File>& takeFiles_, const juce::ValueTree& takeTree_, int activeTakeIndex_,
                        double sourceTimeMultiplier_, double offset_, double maxLength_, double xFade)
-        : engine (e), takesRefs (takesRefs_), takeTree (takeTree_.createCopy()),
+        : engine (e), takeFiles (takeFiles_), takeTree (takeTree_.createCopy()),
           activeTakeIndex (activeTakeIndex_),
           sourceTimeMultiplier (sourceTimeMultiplier_), offset (offset_), maxLength (maxLength_), crossfadeLength (xFade)
     {
     }
 
     Engine& engine;
-    juce::Array<ProjectItemRef> takesRefs;
+    juce::Array<juce::File> takeFiles; // resolved on the message thread, as takes can be project items or paths
     const juce::ValueTree takeTree;
     const int activeTakeIndex;
     const double sourceTimeMultiplier, offset, maxLength, crossfadeLength;
@@ -748,8 +748,9 @@ WaveCompManager::WaveCompManager (WaveAudioClip& owner)
                                       ProjectItemID::createNewID (pid->getProjectID()).toString(),
                                       &owner.edit.getUndoManager());
                 }
-                else if (auto project = getProjectForEdit (clip.edit))
+                else
                 {
+                    // Folder-based project or no project: the comp's path, where it will be flattened to
                     auto takeIndex = takesTree.indexOf (take);
                     auto destFile = getDefaultTakeFile (takeIndex);
 
@@ -852,7 +853,8 @@ void WaveCompManager::triggerCompRender()
 
 void WaveCompManager::flattenTake (int takeIndex, bool deleteSourceFiles)
 {
-    if (getRenderProgress() < 1.0f || ! lastCompFile.isValid())
+    // Only a comp has a render to wait for; a whole take would wait forever
+    if (isTakeComp (takeIndex) && (getRenderProgress() < 1.0f || ! lastCompFile.isValid()))
     {
         if (flattenRetrier == nullptr)
             flattenRetrier = std::make_unique<FlattenRetrier> (*this, takeIndex, deleteSourceFiles);
@@ -865,6 +867,36 @@ void WaveCompManager::flattenTake (int takeIndex, bool deleteSourceFiles)
     flattenRetrier = nullptr;
 
     auto takeTree = takesTree.getChild (takeIndex);
+
+    // Without a project, the comp's file goes beside the takes and the clip refers to it by path
+    if (getProjectForEdit (clip.edit) == nullptr)
+    {
+        if (isTakeComp (takeIndex))
+        {
+            auto destCompFile = getDefaultTakeFile (takeIndex);
+            clip.edit.engine.getAudioFileManager().releaseFile (lastCompFile);
+
+            // Copied rather than moved, so the comp still plays if the flatten is undone
+            if (destCompFile == juce::File() || ! lastCompFile.getFile().copyFileTo (destCompFile))
+            {
+                clip.edit.engine.getUIBehaviour().showWarningAlert (TRANS("Problem flattening comp"),
+                                                                    TRANS("There was a problem creating the comp file at XYYX, "
+                                                                          "please ensure you have write access to this directory and try again.")
+                                                                    .replace ("XYYX", "\"" + destCompFile.getFullPathName() + "\""));
+                return;
+            }
+
+            setSourceFileForTake (takeIndex, destCompFile);
+        }
+
+        // Keep a local reference here to avoid re-creating it during the clear process
+        CompManager::Ptr ptr = &clip.getCompManager();
+        clip.setCurrentTake (takeIndex);
+        clip.deleteAllUnusedTakes (deleteSourceFiles);
+        clip.setShowingTakes (false);
+        clip.sourceMediaChanged();
+        return;
+    }
 
     if (auto item = getOrCreateProjectItemForTake (takeTree))
     {
@@ -957,30 +989,38 @@ ProjectItemRef WaveCompManager::getProjectItemRefForTake (int takeIndex) const
 
 AudioFile WaveCompManager::getSourceFileForTake (int takeIndex) const
 {
-    auto& e = clip.edit.engine;
-    return AudioFile (e, e.getProjectManager().findSourceFile (getProjectItemRefForTake (takeIndex)));
+    // A take's source can be a ProjectItemID or a file path, like a clip's
+    return AudioFile (clip.edit.engine,
+                      SourceFileReference::findFileFromString (clip.edit, getProjectItemRefForTake (takeIndex).toString()));
 }
 
 juce::File WaveCompManager::getDefaultTakeFile (int takeIndex) const
 {
+    juce::String compName;
+    compName << "_clip_" << clip.itemID.toString() << "_comp_" << (takeIndex - getNumTakes() + 2);
+
+    // Beside the first take, whether it's a project item or a path
+    auto firstTakeFile = getSourceFileForTake (0).getFile();
+
+    if (firstTakeFile.existsAsFile())
+    {
+        auto baseFileName = firstTakeFile.getFileNameWithoutExtension().upToFirstOccurrenceOf ("_take_", false, false);
+
+        // The extension first, so an earlier flatten's file isn't taken for a free name
+        return firstTakeFile.getSiblingFile (baseFileName + compName)
+                 .withFileExtension (firstTakeFile.getFileExtension()).getNonexistentSibling();
+    }
+
     if (auto project = getProjectForEdit (clip.edit))
     {
         auto firstTakeItem = project->getProjectItemFor (clip.getTakes()[0]);
 
-        juce::String compName;
-        compName << "_clip_" << clip.itemID.toString() << "_comp_" << (takeIndex - getNumTakes() + 2);
-
         if (firstTakeItem != nullptr)
         {
-            auto firstTakeFile = firstTakeItem->getSourceFile();
-            auto baseFileName = firstTakeFile.getFileNameWithoutExtension().upToFirstOccurrenceOf ("_take_", false, false);
-            auto compFileName = baseFileName + compName;
+            auto baseFileName = firstTakeItem->getSourceFile().getFileNameWithoutExtension().upToFirstOccurrenceOf ("_take_", false, false);
 
-            return firstTakeFile.existsAsFile()
-                     ? firstTakeFile.getSiblingFile (compFileName)
-                         .getNonexistentSibling().withFileExtension (firstTakeFile.getFileExtension())
-                     : project->getDirectoryForMedia (ProjectItem::Category::recorded)
-                         .getChildFile (compFileName).withFileExtension ("wav");
+            return project->getDirectoryForMedia (ProjectItem::Category::recorded)
+                     .getChildFile (baseFileName + compName).withFileExtension ("wav");
         }
 
         // First take item not found — use the media directory directly
@@ -993,9 +1033,6 @@ juce::File WaveCompManager::getDefaultTakeFile (int takeIndex) const
     {
         if (auto editFile = clip.edit.editFileRetriever(); editFile != juce::File())
         {
-            juce::String compName;
-            compName << "_clip_" << clip.itemID.toString() << "_comp_" << (takeIndex - getNumTakes() + 2);
-
             return editFile.getParentDirectory()
                      .getChildFile (clip.getName() + compName).withFileExtension ("wav");
         }
@@ -1038,9 +1075,9 @@ juce::ValueTree WaveCompManager::addNewComp()
         auto newID = ProjectItemID::createNewID (editPid->getProjectID());
         newTake.setProperty (IDs::source, newID.toString(), nullptr);
     }
-    else if (auto project = getProjectForEdit (clip.edit))
+    else
     {
-        // Folder-based project: use expected destination path as the source ref
+        // Folder-based project or no project: use expected destination path as the source ref
         auto newTakeIndex = takesTree.getNumChildren();
         auto destFile = getDefaultTakeFile (newTakeIndex);
 
@@ -1051,10 +1088,6 @@ juce::ValueTree WaveCompManager::addNewComp()
             SourceFileReference sfr (clip.edit, newTake, IDs::source);
             sfr.setToFile (destFile, SourceFileReference::PathStyle::chooseBest, true);
         }
-    }
-    else
-    {
-        return {};
     }
 
     newTake.setProperty (IDs::isComp, true, nullptr);
@@ -1071,7 +1104,12 @@ WaveCompManager::CompRenderContext* WaveCompManager::createRenderContext() const
 {
     const double xFadeMs = clip.edit.engine.getPropertyStorage().getProperty (SettingID::compCrossfadeMs, 20.0);
 
-    return new CompRenderContext (clip.edit.engine, clip.getTakes(), getActiveTakeTree(), getActiveTakeIndex(),
+    juce::Array<juce::File> takeFiles;
+
+    for (int i = 0; i < takesTree.getNumChildren(); ++i)
+        takeFiles.add (getSourceFileForTake (i).getFile());
+
+    return new CompRenderContext (clip.edit.engine, takeFiles, getActiveTakeTree(), getActiveTakeIndex(),
                                   getSourceTimeMultiplier(), getOffset(), getMaxCompLength(), xFadeMs / 1000.0);
 }
 
@@ -1105,12 +1143,9 @@ bool WaveCompManager::renderTake (CompRenderContext& context, Edit& edit, AudioF
         auto takeIndex = (int) compSegment.getProperty (IDs::takeIndex);
         auto endTime = double (compSegment.getProperty (IDs::endTime)) / timeRatio;
 
-        if (juce::isPositiveAndBelow (takeIndex, context.takesRefs.size()))
+        if (juce::isPositiveAndBelow (takeIndex, context.takeFiles.size()))
         {
-            const auto takeRef = context.takesRefs[takeIndex];
-            jassert (takeRef.isValid());
-
-            auto takeFile = AudioFile (context.engine, context.engine.getProjectManager().findSourceFile (takeRef));
+            auto takeFile = AudioFile (context.engine, context.takeFiles[takeIndex]);
 
             auto node = tracktion::graph::makeNode<WaveNode> (takeFile, totalRange, TimeDuration(), TimeRange(), LiveClipLevel(), 1.0,
                                                               ChannelConfiguration::discreteChannels (takeFile.getInfo().numChannels),
@@ -1253,9 +1288,9 @@ private:
         // just use the first existing take as the basis for the comp render
         juce::File takeFile;
 
-        for (auto& takeRef : context->takesRefs)
+        for (auto& f : context->takeFiles)
         {
-            takeFile = engine.getProjectManager().findSourceFile (takeRef);
+            takeFile = f;
 
             if (takeFile.existsAsFile())
                 break;
@@ -1289,9 +1324,11 @@ static void beginCompGeneration (WaveAudioClip& clip, int takeIndex)
 {
     CRASH_TRACER
     auto& cm = clip.getCompManager();
+    auto compFile = TemporaryFileManager::getFileForCachedCompRender (clip, cm.getTakeHash (takeIndex));
+    compFile.getFile().getParentDirectory().createDirectory(); // it may be a folder of the EngineBehaviour's
 
     clip.edit.engine.getAudioFileManager()
-       .proxyGenerator.beginJob (new CompGeneratorJob (clip, TemporaryFileManager::getFileForCachedCompRender (clip, cm.getTakeHash (takeIndex))));
+       .proxyGenerator.beginJob (new CompGeneratorJob (clip, compFile));
 }
 
 void WaveCompManager::timerCallback()
@@ -1328,7 +1365,9 @@ void WaveCompManager::timerCallback()
     }
     else if (! isComp)
     {
+        // A whole take plays its own file, so there's no comp file to play
         lastHash = 0;
+        return;
     }
 
     if (clip.getCurrentSourceFile() != lastCompFile.getFile())
@@ -1449,6 +1488,12 @@ void MidiCompManager::triggerCompRender()
 
     lastRenderedTake = takeIndex;
     lastHash = hash;
+
+    // Undo and redo put back the notes made with the sections they bring back, so they're already made.
+    // Making them again here would be a new change, clearing the redo history.
+    if (auto dest = clip.getTakeSequence (takeIndex); dest != nullptr && isTakeComp (takeIndex)
+         && static_cast<juce::int64> (dest->state[IDs::hash]) == static_cast<juce::int64> (hash))
+        return;
 
     if (isTakeComp (lastRenderedTake))
         createComp (getActiveTakeTree());
@@ -1574,6 +1619,7 @@ void MidiCompManager::createComp (const juce::ValueTree& takeTree)
         }
 
         dest->setCompList (true);
+        dest->state.setProperty (IDs::hash, static_cast<juce::int64> (getTakeHash (lastRenderedTake)), um);
     }
 }
 

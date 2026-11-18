@@ -831,7 +831,7 @@ void MidiClip::valueTreeChildAdded (juce::ValueTree& p, juce::ValueTree& c)
         || (p.hasType (IDs::NOTE) && MidiExpression::isExpression (c.getType())))
         clearCachedLoopSequence();
     else if ((p == state || p.getParent() == state) && c.hasType (IDs::SEQUENCE))
-        channelSequence.add (new MidiList (c, getUndoManager()));
+        channelSequence.insert (p == state ? -1 : p.indexOf (c), new MidiList (c, getUndoManager())); // in the takes' order, e.g. when undo puts one back
 
     if (c.hasType (IDs::PATTERNGENERATOR))
         patternGenerator = std::make_unique<PatternGenerator> (*this, c);

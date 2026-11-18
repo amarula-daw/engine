@@ -313,6 +313,10 @@ AudioFile TemporaryFileManager::getFileForCachedClipRender (const AudioClipBase&
 
 AudioFile TemporaryFileManager::getFileForCachedCompRender (const AudioClipBase& clip, HashCode takeHash)
 {
+    if (auto folder = clip.edit.engine.getEngineBehaviour().getFolderForCompRenders (clip.edit); folder != juce::File())
+        return AudioFile (clip.edit.engine, folder.getChildFile (getCompPrefix() + "0_" + clip.itemID.toString() + "_"
+                                                                + juce::String::toHexString (takeHash) + ".wav"));
+
     return getCachedClipFileWithPrefix (clip, getCompPrefix(), takeHash);
 }
 

@@ -170,6 +170,11 @@ public:
     /// parsing an audio input device's target filename.
     virtual juce::File getDefaultFolderForAudioRecordings (Edit&)                   { return {}; }
 
+    /// If implemented, comps of audio takes are rendered into this folder (e.g. beside the
+    /// project's recordings, so they're still there when it's opened again) rather than
+    /// the Edit's temporary folder.
+    virtual juce::File getFolderForCompRenders (Edit&)                              { return {}; }
+
     /// The default filename that will be used for audio input devices if not overridden
     virtual juce::String getDefaultAudioRecordingFilePattern()                      { return "%projectdir%/%edit%_%track%_Take_%take%"; }
 

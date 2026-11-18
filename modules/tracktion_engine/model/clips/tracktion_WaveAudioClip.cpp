@@ -259,6 +259,10 @@ int WaveAudioClip::getCurrentTake() const
         auto takesTree = getTakesTree();
         auto pid = sourceFileReference.getSourceProjectItemRef().toString();
 
+        // Without a project, a source path isn't a ProjectItemRef, so compare the paths themselves
+        if (pid.isEmpty())
+            pid = sourceFileReference.source.get();
+
         for (int i = takesTree.getNumChildren(); --i >= 0;)
         {
             if (takesTree.getChild (i).getProperty (IDs::source) == pid)
@@ -296,12 +300,33 @@ void WaveAudioClip::valueTreeChildAdded (juce::ValueTree& p, juce::ValueTree& c)
 {
     AudioClipBase::valueTreeChildAdded (p, c);
     invalidateCurrentTake (p);
+
+    // Takes put back (e.g. by undoing deleteAllUnusedTakes) need their comp manager again, as initialise()
+    // makes it. Not from here, as it can write to the Edit, which can't happen part way through an undo.
+    if (p == state && c.hasType (IDs::TAKES))
+    {
+        juce::MessageManager::callAsync ([weakRef = makeSafeRef (*this)]
+        {
+            if (auto clip = weakRef.get(); clip != nullptr && clip->hasAnyTakes())
+            {
+                clip->getCompManager();
+                clip->sourceMediaChanged();
+            }
+        });
+    }
 }
 
 void WaveAudioClip::valueTreeChildRemoved (juce::ValueTree& p, juce::ValueTree& c, int oldIndex)
 {
     AudioClipBase::valueTreeChildRemoved (p, c, oldIndex);
     invalidateCurrentTake (p);
+
+    // The comp manager watches the takes it was made for, so it goes with them (e.g. redoing a flatten)
+    if (p == state && c.hasType (IDs::TAKES) && compManager != nullptr && compManager->getTakesTree() == c)
+    {
+        compManager = nullptr;
+        sourceMediaChanged();
+    }
 }
 
 void WaveAudioClip::valueTreeChildOrderChanged (juce::ValueTree& p, int oldIndex, int newIndex)
@@ -325,7 +350,10 @@ void WaveAudioClip::setCurrentTake (int takeIndex)
     auto mo = edit.engine.getProjectManager().getProjectItem (takeSourceRef);
     invalidateCurrentTake();
 
-    if (mo != nullptr || getCompManager().isTakeComp (takeIndex))
+    // A take referred to by its path has no ProjectItem, but it's still a take
+    const bool isPath = takeSourceRef.isValid() && ! takeSourceRef.isProjectItemID();
+
+    if (mo != nullptr || isPath || getCompManager().isTakeComp (takeIndex))
         sourceFileReference.setToProjectFileReference (takeSourceRef);
     else
         takesTree.removeChild (take, getUndoManager());
@@ -354,6 +382,8 @@ juce::StringArray WaveAudioClip::getTakeDescriptions() const
         {
             if (auto projectItem = edit.engine.getProjectManager().getProjectItem (takes.getReference (i)))
                 s.add (juce::String (i + 1) + ". " + projectItem->getName());
+            else if (auto file = SourceFileReference::findFileFromString (edit, takes.getReference (i).toString()); file.existsAsFile())
+                s.add (juce::String (i + 1) + ". " + file.getFileNameWithoutExtension());
             else
                 s.add (juce::String (i + 1) + ". <" + TRANS("Deleted") + ">");
 
@@ -484,6 +514,16 @@ void WaveAudioClip::deleteAllUnusedTakes (bool deleteSourceFiles)
         if (errors)
             edit.engine.getUIBehaviour().showWarningAlert (TRANS("Delete Unused Takes"),
                                                            TRANS("Some of the wave files couldn't be deleted"));
+    }
+    else
+    {
+        // Without a project, takes are files referred to by path
+        if (deleteSourceFiles)
+            for (auto& takeRef : takes)
+                if (! isTakeInUse (*this, takeRef))
+                    SourceFileReference::findFileFromString (edit, takeRef.toString()).deleteFile();
+
+        clearTakes();
     }
 
     if (! hasAnyTakes())
