@@ -263,8 +263,9 @@ struct EditPlaybackContext::NodePlaybackContext
 
         pendingRollInToLoop.store (false, std::memory_order_release);
 
-        // Keep the requested time visible until a whole block has processed it.
-        // A generation prevents an older block from acknowledging a newer seek.
+        // Report the requested time until the audio thread has applied it, as the
+        // playhead still reads the old one. The generation stops a block that took
+        // an earlier request from acknowledging this one.
         requestedPosition.store (positionToJumpTo.inSeconds(), std::memory_order_release);
         reportRequestedPosition.store (! whenToJump.has_value(), std::memory_order_release);
         postedPositionGeneration.fetch_add (1, std::memory_order_release);
@@ -355,8 +356,7 @@ struct EditPlaybackContext::NodePlaybackContext
 
     void process (float* const* allChannels, int numChannels, int destNumSamples)
     {
-        const auto referenceSampleRange = getReferenceSampleRange();
-        std::optional<uint64_t> positionGenerationToAcknowledge;
+        const auto referenceSampleRange = getReferenceSampleRange();         // Distpatch pending positions
 
         if (positionUpdatePending.load (std::memory_order_acquire))
         {
@@ -398,13 +398,19 @@ struct EditPlaybackContext::NodePlaybackContext
             {
                 if (positionUpdatePending.exchange (false))
                 {
-                    positionGenerationToAcknowledge = postedPositionGeneration.load (std::memory_order_acquire);
+                    // Read before the position, so a post that arrives meanwhile stays pending
+                    const auto generation = postedPositionGeneration.load (std::memory_order_acquire);
                     const auto samplePos = timeToSample (pendingPosition.load (std::memory_order_acquire), sampleRate);
 
                     if (pendingRollInToLoop.load (std::memory_order_acquire))
                         playHead.setRollInToLoop (samplePos);
                     else
                         playHead.setPosition (samplePos);
+
+                    // Publish the new time here rather than relying on the graph, which
+                    // doesn't process a block whilst it's being swapped or cleared
+                    editPlaybackContext.audiblePlaybackTime = tracktion::graph::sampleToTime (playHead.getPosition(), sampleRate);
+                    processedPositionGeneration.store (generation, std::memory_order_release);
                 }
             }
         }
@@ -443,10 +449,6 @@ struct EditPlaybackContext::NodePlaybackContext
             tracktion::graph::Node::ProcessContext pc { numSamplesToProcess, referenceSampleRange, { audioView, scratchMidiBuffer } };
             player.process (pc);
         }
-
-        // The graph has now published audiblePlaybackTime for this position.
-        if (positionGenerationToAcknowledge)
-            processedPositionGeneration.store (*positionGenerationToAcknowledge, std::memory_order_release);
 
         tempoState = { tempoSequence.getInternalSequence().hash(),
                        processState.editBeatRange.getEnd() };
@@ -748,7 +750,6 @@ void EditPlaybackContext::setInsertOptionalLastStageNodeForDeviceCallback (std::
 void EditPlaybackContext::createPlayAudioNodes (TimePosition startTime)
 {
     createNode();
-    postPosition (startTime);
     startPlaying (startTime);
 }
 
