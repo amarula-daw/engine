@@ -1514,7 +1514,30 @@ HashCode PluginEffect::getIndividualHash() const
     if (plugin != nullptr && (plugin->isProcessingEnabled() || lastHash == 0))
     {
         const ScopedPluginUnloadInhibitor lock (*pluginUnloadInhibitor);
-        lastHash = (juce::int64) hashPlugin (state, *plugin);
+        auto h = hashPlugin (state, *plugin);
+
+        // Settings that aren't parameters (a filter's mode, say) change the render too, but not
+        // the plugin's identity, its window or whether it's processing
+        auto pluginState = plugin->state;
+
+        for (int i = 0; i < pluginState.getNumProperties(); ++i)
+        {
+            auto name = pluginState.getPropertyName (i);
+
+            if (matchesAnyOf (name, { IDs::id, IDs::process, IDs::windowX, IDs::windowY }))
+                continue;
+
+            bool isParameter = false;
+
+            for (auto ap : plugin->getAutomatableParameters())
+                if (ap->paramID == name.toString())
+                    isParameter = true;
+
+            if (! isParameter)
+                h = (juce::String (h) + name.toString() + pluginState[name].toString()).hashCode64();
+        }
+
+        lastHash = (juce::int64) h;
     }
 
     return lastHash;
