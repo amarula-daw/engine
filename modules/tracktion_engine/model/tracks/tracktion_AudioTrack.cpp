@@ -877,13 +877,17 @@ void AudioTrack::valueTreePropertyChanged (juce::ValueTree& v, const juce::Ident
         }
         else if (i == IDs::vcaIDs)
         {
-            if (auto vp = getVolumePlugin())
+            // While uninitialised it holds no tracks, and initialising reads the list
+            if (auto vp = getVolumePlugin(); vp != nullptr && ! vp->baseClassNeedsInitialising())
                 vp->refreshVCATrack();
 
             changed();
         }
         else if (i == IDs::monitorMode)
         {
+            for (auto in : edit.getEditInputDevices().getDevicesForTargetTrack (*this))
+                in->trackMonitorModeChanged (*this);
+
             // Live inputs are static nodes in the graph
             edit.restartPlayback();
         }

@@ -63,7 +63,8 @@ void TrackOutput::updateOutput()
 
         for (auto at : getAudioTracks (owner.edit))
         {
-            if (storedTrack != nullptr ? at == storedTrack : at->getAudioTrackNumber() == trackNum)
+            // The number only finds it in state saved before IDs were
+            if (storedID.isValid() ? at == storedTrack : at->getAudioTrackNumber() == trackNum)
             {
                 if (! at->getOutput().feedsInto (&owner))  // check for recursion
                     destTrackID = at->itemID;

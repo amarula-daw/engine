@@ -17,12 +17,19 @@ TrackDelayPlugin::TrackDelayPlugin (PluginCreationInfo info)
 {
     delayMs.setConstrainer ([] (double in) { return juce::jlimit (-maxDelayMs, maxDelayMs, in); });
     delayMs.referTo (state, IDs::delay, getUndoManager(), 0.0);
+    reportedLatency = getLatencySeconds();
 
-    // The latency it reports changes the graph, so it's rebuilt for a new delay
+    // The latency it reports changes the graph, so it's rebuilt when that changes. Only an earlier
+    // shift is latency; a later one just reads further back in the line.
     playbackRestartTimer.setCallback ([this]
                                       {
                                           playbackRestartTimer.stopTimer();
-                                          edit.restartPlayback();
+
+                                          if (auto latency = getLatencySeconds(); latency != reportedLatency)
+                                          {
+                                              reportedLatency = latency;
+                                              edit.restartPlayback();
+                                          }
                                       });
 }
 
@@ -53,6 +60,7 @@ void TrackDelayPlugin::reset()
 {
     delayLine.clear();
     writePosition = 0;
+    currentDelaySamples = juce::roundToInt (std::max (0.0, delayMs.get()) / 1000.0 * sampleRate);
 }
 
 void TrackDelayPlugin::applyToBuffer (const PluginRenderContext& rc)
@@ -60,12 +68,17 @@ void TrackDelayPlugin::applyToBuffer (const PluginRenderContext& rc)
     if (rc.destBuffer == nullptr || delayLine.getNumSamples() == 0)
         return;
 
-    const int delaySamples = juce::roundToInt (std::max (0.0, delayMs.get()) / 1000.0 * sampleRate);
-
-    if (delaySamples <= 0)
-        return;
+    // The line is always written, so a delay changed reads what really came before; after being
+    // bypassed it starts again from silence
+    if (clearLine.exchange (false))
+    {
+        delayLine.clear();
+        currentDelaySamples = juce::roundToInt (std::max (0.0, delayMs.get()) / 1000.0 * sampleRate);
+    }
 
     const int size = delayLine.getNumSamples();
+    const int target = std::min (juce::roundToInt (std::max (0.0, delayMs.get()) / 1000.0 * sampleRate), size - 1);
+    const int previous = std::min (currentDelaySamples, size - 1);
     const int numChannels = std::min (rc.destBuffer->getNumChannels(), delayLine.getNumChannels());
     int position = writePosition;
 
@@ -75,16 +88,26 @@ void TrackDelayPlugin::applyToBuffer (const PluginRenderContext& rc)
         auto* line = delayLine.getWritePointer (channel);
         position = writePosition;
 
+        auto read = [&] (int delay)
+        {
+            auto readPosition = position - delay;
+            return line[readPosition < 0 ? readPosition + size : readPosition];
+        };
+
         for (int i = 0; i < rc.bufferNumSamples; ++i)
         {
             line[position] = samples[i];
 
-            auto readPosition = position - std::min (delaySamples, size - 1);
-
-            if (readPosition < 0)
-                readPosition += size;
-
-            samples[i] = line[readPosition];
+            if (target == previous)
+            {
+                samples[i] = read (target);
+            }
+            else
+            {
+                // A new delay crossfades from the old one over the block, so it doesn't click
+                auto amount = (float) (i + 1) / (float) rc.bufferNumSamples;
+                samples[i] = read (previous) * (1.0f - amount) + read (target) * amount;
+            }
 
             if (++position == size)
                 position = 0;
@@ -92,6 +115,7 @@ void TrackDelayPlugin::applyToBuffer (const PluginRenderContext& rc)
     }
 
     writePosition = position;
+    currentDelaySamples = target;
 }
 
 void TrackDelayPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v)
@@ -102,13 +126,17 @@ void TrackDelayPlugin::restorePluginStateFromValueTree (const juce::ValueTree& v
 
 void TrackDelayPlugin::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& i)
 {
-    if (v == state && i == IDs::delay)
+    Plugin::valueTreePropertyChanged (v, i);
+
+    if (v == state && (i == IDs::delay || i == IDs::enabled))
     {
         delayMs.forceUpdateOfCachedValue();
+
+        if (i == IDs::enabled)
+            clearLine = true;
+
         playbackRestartTimer.startTimer (50);
     }
-
-    Plugin::valueTreePropertyChanged (v, i);
 }
 
 } // namespace tracktion::inline engine

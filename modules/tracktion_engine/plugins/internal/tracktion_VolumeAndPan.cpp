@@ -273,6 +273,10 @@ float VolumeAndPanPlugin::applyVCAs (float sliderPos, TimePosition time)
     if (assignedVcas.empty())
         return sliderPos;
 
+    // A fader all the way down stays silent, whatever the VCAs add
+    if (sliderPos <= 0.0f || volumeFaderPositionToDB (sliderPos) < -96.0f)
+        return 0.0f;
+
     // Assigned VCAs add their decibels, so -6 dB on one is 6 dB down wherever the fader is
     auto db = volumeFaderPositionToDB (sliderPos);
 

@@ -116,6 +116,11 @@ public:
     */
     InputDevice::MonitorMode getMonitorMode (const Track&) const;
 
+    /** Called when a target track's own monitor mode changes, so whether it's being
+        heard is kept in step with the graph that's rebuilt for it.
+    */
+    void trackMonitorModeChanged (const Track&);
+
     /** Returns true if recording is enabled and the input is connected to any target. */
     virtual bool isRecordingActive() const;
 

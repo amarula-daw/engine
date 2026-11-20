@@ -210,6 +210,11 @@ InputDevice::MonitorMode InputDeviceInstance::getMonitorMode (const Track& t) co
     return owner.getMonitorMode();
 }
 
+void InputDeviceInstance::trackMonitorModeChanged (const Track& t)
+{
+    livePlayActive[t.itemID] = isLivePlayEnabled (t);
+}
+
 void InputDeviceInstance::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id)
 {
     if (v.getParent() == state)

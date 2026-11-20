@@ -203,7 +203,8 @@ struct IDRemapping
     static bool isIDList (juce::StringRef att)
     {
         return att == IDs::hiddenClips || att == IDs::lockedClips
-                || att == IDs::ghostTracks || att == IDs::renderTracks;
+                || att == IDs::ghostTracks || att == IDs::renderTracks
+                || att == IDs::vcaIDs;
     }
 
     template <typename Visitor>

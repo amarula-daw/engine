@@ -45,7 +45,7 @@ public:
     void applyToBuffer (const PluginRenderContext&) override;
 
     /** How far an earlier track is shifted, as latency for the rest of the Edit to wait for. */
-    double getLatencySeconds() override                     { return std::max (0.0, -delayMs.get()) / 1000.0; }
+    double getLatencySeconds() override                     { return isEnabled() ? std::max (0.0, -delayMs.get()) / 1000.0 : 0.0; }
 
     void restorePluginStateFromValueTree (const juce::ValueTree&) override;
 
@@ -55,7 +55,9 @@ public:
 
 private:
     juce::AudioBuffer<float> delayLine;
-    int writePosition = 0;
+    int writePosition = 0, currentDelaySamples = 0;
+    std::atomic<bool> clearLine { false };
+    double reportedLatency = 0.0;
     LambdaTimer playbackRestartTimer;
 
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
