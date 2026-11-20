@@ -80,6 +80,11 @@ public:
     //==============================================================================
     juce::CachedValue<float> volume, pan, trim, width;
     juce::CachedValue<bool> applyToMidi, ignoreVca, polarity, mono, muted;
+
+    /** Re-reads the VCAs the track follows: its parent folders', and those its
+        IDs::vcaIDs names (a comma-separated list of folder tracks with a VCA).
+    */
+    void refreshVCATrack();
     juce::CachedValue<int> panLaw;
 
     // NB the units used here are slider position
@@ -97,12 +102,12 @@ private:
 
     RealTimeSpinLock vcaTrackLock;
     juce::ReferenceCountedObjectPtr<AudioTrack> vcaTrack;
+    std::vector<juce::ReferenceCountedObjectPtr<FolderTrack>> assignedVcas;
     const bool isMasterVolume = false;
 
     void setSmoothedValueTargets (TimePosition, bool);
     void applyWidth (juce::AudioBuffer<float>&, int startSample, int numSamples);
-    void refreshVCATrack();
-    float getVCAPosDelta (TimePosition);
+    float applyVCAs (float sliderPos, TimePosition);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (VolumeAndPanPlugin)
 };

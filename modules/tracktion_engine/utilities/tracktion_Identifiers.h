@@ -501,6 +501,7 @@ namespace IDs
     DECLARE_ID (frozen)
     DECLARE_ID (frozenIndividually)
     DECLARE_ID (monitorMode)
+    DECLARE_ID (vcaIDs)
     DECLARE_ID (maxInputs)
     DECLARE_ID (compGroup)
     DECLARE_ID (midiVProp)

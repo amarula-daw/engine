@@ -231,10 +231,12 @@ void VolumeAndPanPlugin::initialiseWithoutStopping (const PluginInitialisationIn
 void VolumeAndPanPlugin::deinitialise()
 {
     juce::ReferenceCountedObjectPtr<AudioTrack> deleter;
+    std::vector<juce::ReferenceCountedObjectPtr<FolderTrack>> vcaDeleter;
 
     {
         const std::scoped_lock sl (vcaTrackLock);
         std::swap (vcaTrack, deleter);
+        std::swap (assignedVcas, vcaDeleter);
     }
 }
 
@@ -257,20 +259,40 @@ static float getParentVcaDb (Track& track, TimePosition time)
     return volumeFaderPositionToDB (decibelsToVolumeFaderPosition (0) + posOffset);
 }
 
-float VolumeAndPanPlugin::getVCAPosDelta (TimePosition time)
+float VolumeAndPanPlugin::applyVCAs (float sliderPos, TimePosition time)
 {
     const std::scoped_lock sl (vcaTrackLock);
 
-    if (vcaTrack != nullptr)
-        return decibelsToVolumeFaderPosition (getParentVcaDb (*vcaTrack, time))
-                 - decibelsToVolumeFaderPosition (0.0f);
+    if (vcaTrack == nullptr)
+        return sliderPos;
 
-    return {};
+    // Parent folders' VCAs move the fader's position, as if it were pushed along
+    sliderPos += decibelsToVolumeFaderPosition (getParentVcaDb (*vcaTrack, time))
+                   - decibelsToVolumeFaderPosition (0.0f);
+
+    if (assignedVcas.empty())
+        return sliderPos;
+
+    // Assigned VCAs add their decibels, so -6 dB on one is 6 dB down wherever the fader is
+    auto db = volumeFaderPositionToDB (sliderPos);
+
+    for (auto& vca : assignedVcas)
+    {
+        auto vcaDb = vca->getVcaDb (time);
+
+        // One all the way down silences the channel
+        if (vcaDb < -96.0f)
+            return 0.0f;
+
+        db += vcaDb;
+    }
+
+    return decibelsToVolumeFaderPosition (db);
 }
 
 void VolumeAndPanPlugin::setSmoothedValueTargets (TimePosition time, bool updateGain)
 {
-    auto sliderPos = getSliderPos() + getVCAPosDelta (time);
+    auto sliderPos = applyVCAs (getSliderPos(), time);
 
     float gainL, gainR;
     getGainsFromVolumeFaderPositionAndPan (sliderPos, getPan(), getPanLaw(), gainL, gainR);
@@ -354,10 +376,28 @@ void VolumeAndPanPlugin::applyWidth (juce::AudioBuffer<float>& buffer, int start
 void VolumeAndPanPlugin::refreshVCATrack()
 {
     juce::ReferenceCountedObjectPtr<AudioTrack> newVcaTrack (ignoreVca ? nullptr : dynamic_cast<AudioTrack*> (getOwnerTrack()));
+    std::vector<juce::ReferenceCountedObjectPtr<FolderTrack>> newAssignedVcas;
+
+    if (newVcaTrack != nullptr)
+    {
+        for (auto& id : juce::StringArray::fromTokens (newVcaTrack->state[IDs::vcaIDs].toString(), ",", {}))
+        {
+            if (auto folder = dynamic_cast<FolderTrack*> (findTrackForID (edit, EditItemID::fromString (id))))
+            {
+                // A parent folder's VCA already counts
+                if (folder->getVCAPlugin() == nullptr || newVcaTrack->isAChildOf (*folder))
+                    continue;
+
+                if (std::find (newAssignedVcas.begin(), newAssignedVcas.end(), folder) == newAssignedVcas.end())
+                    newAssignedVcas.push_back (folder);
+            }
+        }
+    }
 
     {
         const std::scoped_lock sl (vcaTrackLock);
         std::swap (vcaTrack, newVcaTrack);
+        std::swap (assignedVcas, newAssignedVcas);
     }
 }
 
