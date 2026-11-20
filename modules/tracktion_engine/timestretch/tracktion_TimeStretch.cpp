@@ -87,6 +87,7 @@ struct TimeStretcher::Stretcher
     virtual int processData (const float* const* inChannels, int numSamples, float* const* outChannels) = 0;
     virtual int flush (float* const* outChannels) = 0;
     virtual int getLatencySamples() const { return 0; }
+    virtual int getInputLatencySamples() const { return 0; }
 };
 
 //==============================================================================
@@ -966,6 +967,11 @@ struct SignalsmithStretcher  : public TimeStretcher::Stretcher
         return stretch.inputLatency() + stretch.outputLatency();
     }
 
+    int getInputLatencySamples() const override
+    {
+        return stretch.inputLatency();
+    }
+
 private:
     signalsmith::stretch::SignalsmithStretch<float> stretch;
     int numChannels = 0;
@@ -1381,6 +1387,11 @@ int TimeStretcher::flush (float* const* outChannels)
 int TimeStretcher::getLatencySamples() const
 {
     return stretcher ? stretcher->getLatencySamples() : 0;
+}
+
+int TimeStretcher::getInputLatencySamples() const
+{
+    return stretcher ? stretcher->getInputLatencySamples() : 0;
 }
 
 int TimeStretcher::getLatencySamplesForMode (Mode mode, double sampleRate, bool realtime)

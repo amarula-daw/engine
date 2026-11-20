@@ -2172,8 +2172,10 @@ struct StretchSegment
                                             segment.getTranspose());
 
             // The stretcher's output starts this late, so it's dropped to keep the audio in place
-            latencyToSkip = timestretcher.getLatencySamples()
-                              + (int) std::round ((double) preRollSamples / segment.getStretchRatio());
+            // (its input part, and any run-up, last 1 / the stretch ratio as many output samples)
+            const auto inputLatency = timestretcher.getInputLatencySamples();
+            latencyToSkip = timestretcher.getLatencySamples() - inputLatency
+                              + (int) std::round ((double) (inputLatency + preRollSamples) / segment.getStretchRatio());
         }
     }
 

@@ -184,6 +184,11 @@ public:
     */
     int getLatencySamples() const;
 
+    /** Returns the part of getLatencySamples() that's in input samples (the rest is in output
+        samples), so at a speed other than 1 it lasts a different number of output samples.
+    */
+    int getInputLatencySamples() const;
+
     /** Returns the latency for a given mode and sample rate without creating a full stretcher.
         Useful for reporting latency to the graph before the stretcher is initialised.
     */
