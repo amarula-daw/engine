@@ -615,7 +615,7 @@ TimeDuration AudioClipBase::getFadeIn() const
     asyncFunctionCaller.handleUpdateNowIfNeeded();
 
     if (autoCrossfade && getOverlappingClip (ClipDirection::previous) != nullptr)
-        return autoFadeIn;
+        return getAutoFades().first;
 
     auto len = getPosition().getLength();
 
@@ -630,7 +630,7 @@ TimeDuration AudioClipBase::getFadeOut() const
     asyncFunctionCaller.handleUpdateNowIfNeeded();
 
     if (autoCrossfade && getOverlappingClip (ClipDirection::next) != nullptr)
-        return autoFadeOut;
+        return getAutoFades().second;
 
     auto len = getPosition().getLength();
 
@@ -638,6 +638,27 @@ TimeDuration AudioClipBase::getFadeOut() const
         return TimeDuration::fromSeconds (fadeOut * len.inSeconds() / (fadeIn + fadeOut));
 
     return fadeOut;
+}
+
+std::pair<TimeDuration, TimeDuration> AudioClipBase::getAutoFades() const
+{
+    // Worked out from where the clips are now, as the async update can still be pending
+    // after a clip moves, and anything reading the fades then would get the old overlap
+    auto position = getPosition();
+    auto prevClip = getOverlappingClip (ClipDirection::previous);
+    auto nextClip = getOverlappingClip (ClipDirection::next);
+
+    auto in  = prevClip != nullptr ? prevClip->getPosition().getEnd() - position.getStart() : fadeIn.get();
+    auto out = nextClip != nullptr ? position.getEnd() - nextClip->getPosition().getStart() : fadeOut.get();
+    auto len = position.getLength();
+
+    if (in + out > len)
+    {
+        const double scale = len / (in + out);
+        return { in * scale, out * scale };
+    }
+
+    return { in, out };
 }
 
 void AudioClipBase::setFadeInType (AudioFadeCurve::Type t)

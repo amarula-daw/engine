@@ -595,6 +595,8 @@ public:
 
     /** Trims the fade in out lengths to avoid any overlap between them. */
     void checkFadeLengthsForOverrun();
+    /** The auto-crossfade lengths for where the overlapping clips are now. */
+    std::pair<TimeDuration, TimeDuration> getAutoFades() const;
 
     /** Defines a prevous/next direction. @see getOverlappingClip */
     enum class ClipDirection { previous, next, none };
