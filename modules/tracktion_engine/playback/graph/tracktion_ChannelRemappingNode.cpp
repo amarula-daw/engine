@@ -101,9 +101,12 @@ bool ChannelRemappingNode::isReadyToProcess()
     return input->hasProcessed();
 }
 
-void ChannelRemappingNode::prepareToPlay (const tracktion::graph::PlaybackInitialisationInfo&)
+void ChannelRemappingNode::prepareToPlay (const tracktion::graph::PlaybackInitialisationInfo& info)
 {
-    // Nothing special needed - input handles its own preparation
+    // Room to copy the input to if this node is given its input's buffer to write into
+    if (mode == Mode::ExplicitMapping)
+        inputCopy.resize ({ (choc::buffer::ChannelCount) std::max (1, input->getNodeProperties().numberOfChannels),
+                            (choc::buffer::FrameCount) std::max (1, info.blockSize) });
 }
 
 void ChannelRemappingNode::process (ProcessContext& pc)
@@ -122,14 +125,43 @@ void ChannelRemappingNode::processExplicitMapping (ProcessContext& pc)
     // Always pass through MIDI
     pc.buffers.midi.copyFrom (inputBuffers.midi);
 
+    // The graph can hand this node its input's buffer as its own, uncleared. Adding the input to
+    // itself would then double it (a mono clip played twice as loud through a clip plugin), so
+    // the mapping reads from a copy and starts from silence
+    auto sourceAudio = inputBuffers.audio;
+    const auto numSourceChannels = inputBuffers.audio.getNumChannels();
+    const auto numFrames = inputBuffers.audio.getNumFrames();
+    bool sharesInput = false;
+
+    for (choc::buffer::ChannelCount d = 0; d < pc.buffers.audio.getNumChannels(); ++d)
+        for (choc::buffer::ChannelCount c = 0; c < numSourceChannels; ++c)
+            if (pc.buffers.audio.getChannel (d).data.data == inputBuffers.audio.getChannel (c).data.data)
+                sharesInput = true;
+
+    if (sharesInput)
+    {
+        // prepareToPlay sizes the copy; a bigger block shouldn't come, but doubling is worse than allocating
+        if (numSourceChannels > inputCopy.getNumChannels() || numFrames > inputCopy.getNumFrames())
+        {
+            jassertfalse;
+            inputCopy.resize ({ std::max (numSourceChannels, inputCopy.getNumChannels()),
+                                std::max (numFrames, inputCopy.getNumFrames()) });
+        }
+
+        auto copyView = inputCopy.getView().getFirstChannels (numSourceChannels).getStart (numFrames);
+        copy (copyView, inputBuffers.audio);
+        sourceAudio = copyView;
+        pc.buffers.audio.clear();
+    }
+
     // Remap audio channels - use add() to accumulate (allows multiple sources to one dest)
     for (const auto& e : channelMap.entries)
     {
-        if (e.source < static_cast<int> (inputBuffers.audio.getNumChannels())
+        if (e.source < static_cast<int> (sourceAudio.getNumChannels())
             && e.dest < static_cast<int> (pc.buffers.audio.getNumChannels()))
         {
             auto destChan = pc.buffers.audio.getChannel (static_cast<choc::buffer::ChannelCount> (e.dest));
-            auto srcChan = inputBuffers.audio.getChannel (static_cast<choc::buffer::ChannelCount> (e.source));
+            auto srcChan = sourceAudio.getChannel (static_cast<choc::buffer::ChannelCount> (e.source));
 
             if (e.gain == 1.0f)
                 add (destChan, srcChan);

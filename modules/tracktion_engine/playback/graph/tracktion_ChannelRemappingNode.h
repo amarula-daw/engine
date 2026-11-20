@@ -83,6 +83,7 @@ private:
 
     // Explicit mapping mode
     ChannelMap channelMap;
+    choc::buffer::ChannelArrayBuffer<float> inputCopy;
 
     // Processor passthrough mode
     ChannelConfiguration inputChannelConfig;
