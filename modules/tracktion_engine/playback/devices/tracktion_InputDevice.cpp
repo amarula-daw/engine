@@ -190,7 +190,7 @@ bool InputDeviceInstance::isLivePlayEnabled (const Track& t) const
         if (dest->targetID != t.itemID)
             continue;
 
-        switch (owner.getMonitorMode())
+        switch (getMonitorMode (t))
         {
             case InputDevice::MonitorMode::on:          return true;
             case InputDevice::MonitorMode::automatic:   return isRecordingEnabled (t.itemID);
@@ -199,6 +199,15 @@ bool InputDeviceInstance::isLivePlayEnabled (const Track& t) const
     }
 
     return false;
+}
+
+InputDevice::MonitorMode InputDeviceInstance::getMonitorMode (const Track& t) const
+{
+    if (auto trackMode = t.state.getProperty (IDs::monitorMode).toString(); trackMode.isNotEmpty())
+        if (auto mode = magic_enum::enum_cast<InputDevice::MonitorMode> (trackMode.toStdString()))
+            return *mode;
+
+    return owner.getMonitorMode();
 }
 
 void InputDeviceInstance::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& id)
@@ -278,6 +287,8 @@ void InputDeviceInstance::updateRecordingStatus()
         const bool isLivePlayActive = isLivePlayEnabled (*track);
 
         // This logic rebuilds the audio graph if the monitor state changes as it's a static node-type in the graph
+        auto& wasLivePlayActive = livePlayActive[targetID];
+
         if (destinationsChanged || (! wasRecording && wasLivePlayActive != isLivePlayActive))
             restartPlayback = true;
 

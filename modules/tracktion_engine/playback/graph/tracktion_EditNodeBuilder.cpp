@@ -411,9 +411,11 @@ namespace
         return {};
     }
 
-    bool shouldMonitorTrackDevice (InputDeviceInstance& instance)
+    bool shouldMonitorTrackDevice (InputDeviceInstance& instance, EditItemID trackID)
     {
-        switch (instance.owner.getMonitorMode())
+        auto track = findTrackForID (instance.edit, trackID);
+
+        switch (track != nullptr ? instance.getMonitorMode (*track) : instance.owner.getMonitorMode())
         {
             case InputDevice::MonitorMode::on:          return true;
             case InputDevice::MonitorMode::automatic:   return instance.isRecordingActive();
@@ -1266,7 +1268,7 @@ std::unique_ptr<tracktion::graph::Node> createLiveInputNodeForDevice (InputDevic
         if (midiDevice->isTrackDevice())
             if (auto sourceTrack = getTrackContainingTrackDevice (inputDeviceInstance.edit, *midiDevice))
                 return makeNode<TrackMidiInputDeviceNode> (*midiDevice, makeNode<ReturnNode> (getMidiInputDeviceBusID (sourceTrack->itemID)), params.processState,
-                                                           shouldMonitorTrackDevice (inputDeviceInstance));
+                                                           shouldMonitorTrackDevice (inputDeviceInstance, trackID));
 
         if (HostedAudioDeviceInterface::isHostedMidiInputDevice (*midiDevice))
             return makeNode<HostedMidiInputDeviceNode> (inputDeviceInstance, *midiDevice, playHeadState, params.processState);
@@ -1282,7 +1284,7 @@ std::unique_ptr<tracktion::graph::Node> createLiveInputNodeForDevice (InputDevic
                 return makeNode<TrackWaveInputDeviceNode> (params.processState,
                                                            *waveDevice,
                                                            makeNode<ReturnNode> (getWaveInputDeviceBusID (sourceTrack->itemID)),
-                                                           shouldMonitorTrackDevice (inputDeviceInstance));
+                                                           shouldMonitorTrackDevice (inputDeviceInstance, trackID));
             }
 
         return makeNode<WaveInputDeviceNode> (inputDeviceInstance, *waveDevice,

@@ -111,6 +111,11 @@ public:
     /** Whether the track should monitor the input or not. */
     virtual bool isLivePlayEnabled (const Track&) const;
 
+    /** Returns the monitor mode for a target track: the track's own IDs::monitorMode
+        if it has one, otherwise the device's.
+    */
+    InputDevice::MonitorMode getMonitorMode (const Track&) const;
+
     /** Returns true if recording is enabled and the input is connected to any target. */
     virtual bool isRecordingActive() const;
 
@@ -382,7 +387,8 @@ protected:
 
 private:
     mutable AsyncCaller trackDeviceEnabler, recordStatusUpdater;
-    bool wasLivePlayActive = false, destinationsChanged = false;
+    std::map<EditItemID, bool> livePlayActive;
+    bool destinationsChanged = false;
     std::vector<EditItemID> changedTargetTrackIDs;
     void updateRecordingStatus();
     void handleDestinationChange (EditItemID, bool);

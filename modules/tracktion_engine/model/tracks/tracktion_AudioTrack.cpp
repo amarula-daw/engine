@@ -875,6 +875,11 @@ void AudioTrack::valueTreePropertyChanged (juce::ValueTree& v, const juce::Ident
         {
             updateMidiNoteMapCache();
         }
+        else if (i == IDs::monitorMode)
+        {
+            // Live inputs are static nodes in the graph
+            edit.restartPlayback();
+        }
     }
     else if (Clip::isClipState (v))
     {
