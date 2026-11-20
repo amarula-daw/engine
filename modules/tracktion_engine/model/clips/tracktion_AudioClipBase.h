@@ -523,6 +523,10 @@ public:
         TimeStretcher::Mode mode;
         TimeStretcher::ElastiqueProOptions options;
 
+        /** True when each segment carries on in the source where the next begins (a warped clip's),
+            so a stretch reads on past its end instead of looping back to its start. */
+        bool segmentsAreContiguous = false;
+
         /** Renders this audio segment list to an AudioFile. */
         bool render (Engine&, const AudioFile&, AudioFileWriter&, juce::ThreadPoolJob* const&, std::atomic<float>& progress) const;
 

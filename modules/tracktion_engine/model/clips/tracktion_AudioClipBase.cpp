@@ -2147,7 +2147,14 @@ struct StretchSegment
         {
             auto sampleRange = segment.getSampleRange();
 
-            if (segment.isFollowedBySilence())
+            if (info.segmentsAreContiguous)
+            {
+                // Started a little before the segment, so the stretcher is warmed up by its start
+                // (often a hit, where a warp marker goes); what it makes of the run-up is dropped
+                preRollSamples = std::min (sampleRange.getStart(), (SampleCount) TimeStretcher::getLatencySamplesForMode (info.mode, fileInfo.sampleRate, false));
+                reader->setReadPosition (sampleRange.getStart() - preRollSamples);
+            }
+            else if (segment.isFollowedBySilence())
             {
                 reader->setReadPosition (sampleRange.getStart());
             }
@@ -2163,6 +2170,10 @@ struct StretchSegment
 
             timestretcher.setSpeedAndPitch ((float) (1.0 / segment.getStretchRatio()),
                                             segment.getTranspose());
+
+            // The stretcher's output starts this late, so it's dropped to keep the audio in place
+            latencyToSkip = timestretcher.getLatencySamples()
+                              + (int) std::round ((double) preRollSamples / segment.getStretchRatio());
         }
     }
 
@@ -2256,6 +2267,17 @@ struct StretchSegment
             numRead = timestretcher.flush (outs);
         }
 
+        if (latencyToSkip > 0 && numRead > 0)
+        {
+            auto skipped = std::min (latencyToSkip, numRead);
+
+            for (int i = 0; i < numChannelsToUse; ++i)
+                std::memmove (outs[i], outs[i] + skipped, sizeof (float) * (size_t) (numRead - skipped));
+
+            latencyToSkip -= skipped;
+            numRead -= skipped;
+        }
+
         readySamplesStart = 0;
         readySamplesEnd = numRead;
 
@@ -2305,10 +2327,12 @@ struct StretchSegment
                 alpha2 = 1.0f - alpha2;
             }
 
+            // Neighbouring segments are the same audio either side of a join, so an equal-gain
+            // crossfade keeps the level steady where an equal-power one would rise by 3 dB
             AudioFadeCurve::applyCrossfadeSection (fifo,
                                                    (int) (start - readySampleOutputPos),
                                                    (int) (end - start),
-                                                   AudioFadeCurve::convex, alpha1, alpha2);
+                                                   AudioFadeCurve::linear, alpha1, alpha2);
         }
     }
 
@@ -2319,7 +2343,8 @@ struct StretchSegment
     AudioFileCache::Reader::Ptr reader;
 
     const int outputBufferSize = 1024;
-    int readySamplesStart = 0, readySamplesEnd = 0;
+    int readySamplesStart = 0, readySamplesEnd = 0, latencyToSkip = 0;
+    SampleCount preRollSamples = 0;
     SampleCount readySampleOutputPos = 0;
     const int crossfadeSamples, numChannelsToUse;
     juce::AudioBuffer<float> fifo { numChannelsToUse, outputBufferSize };
