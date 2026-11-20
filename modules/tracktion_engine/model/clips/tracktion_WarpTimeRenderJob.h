@@ -72,9 +72,11 @@ private:
     {
         auto tm = clip.getTimeStretchMode();
         proxyInfo = std::make_unique<AudioClipBase::ProxyRenderingInfo>();
-        proxyInfo->audioSegmentList  = AudioSegmentList::create (clip);
+        // Laid out from the recording: the clip's own wave info is the copy this job is about to write
+        proxyInfo->audioSegmentList  = AudioSegmentList::create (clip, clip.getWarpTimeManager(), source.getInfo(), clip.getLoopInfo());
         proxyInfo->clipTime          = { {}, clip.getWarpTimeManager().getWarpEndMarkerTime() };
         proxyInfo->speedRatio        = 1.0;
+        proxyInfo->segmentsAreContiguous = true;
         proxyInfo->mode              = (tm != TimeStretcher::disabled && tm != TimeStretcher::ara)
                                          ? tm : TimeStretcher::defaultMode;
     }
