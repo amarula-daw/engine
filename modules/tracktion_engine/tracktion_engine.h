@@ -705,6 +705,7 @@ namespace tracktion::inline engine
 #include "plugins/effects/tracktion_FourOscPlugin.h"
 #include "plugins/effects/tracktion_ImpulseResponsePlugin.h"
 #include "plugins/effects/tracktion_LatencyPlugin.h"
+#include "plugins/effects/tracktion_TrackDelay.h"
 #include "plugins/effects/tracktion_LowPass.h"
 #include "plugins/effects/tracktion_MidiModifier.h"
 #include "plugins/effects/tracktion_MidiEffectPlugin.h"

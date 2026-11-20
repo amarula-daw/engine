@@ -64,6 +64,7 @@ void PluginManager::initialise()
     createBuiltInType<RandomizePlugin>();
     createBuiltInType<ScalePlugin>();
     createBuiltInType<VelocityPlugin>();
+    createBuiltInType<TrackDelayPlugin>();
     createBuiltInType<MidiPatchBayPlugin>();
     createBuiltInType<PatchBayPlugin>();
     createBuiltInType<AuxSendPlugin>();
