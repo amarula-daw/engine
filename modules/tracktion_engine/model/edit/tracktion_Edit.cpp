@@ -2166,6 +2166,14 @@ void Edit::deleteTrack (Track* t)
             }
         };
 
+        // Tracks routed into one being deleted go to the default output rather than nowhere
+        auto rerouteTracksFeeding = [&audioTracks] (AudioTrack& trackBeingDeleted)
+        {
+            for (auto at : audioTracks)
+                if (at != &trackBeingDeleted && at->getOutput().outputsToDestTrack (trackBeingDeleted))
+                    at->getOutput().setOutputToDefaultDevice (false);
+        };
+
         // Remove track from all tracks that might be ghosting it
         // (There's got to be a better way of doing this?)
         if (auto trackAsAudio = dynamic_cast<AudioTrack*> (t))
@@ -2174,12 +2182,15 @@ void Edit::deleteTrack (Track* t)
                 at->setTrackToGhost (trackAsAudio, false);
 
             clearEnabledTrackDevices (trackAsAudio);
+            rerouteTracksFeeding (*trackAsAudio);
         }
 
         if (auto ft = dynamic_cast<FolderTrack*> (t))
         {
             for (auto at : ft->getAllAudioSubTracks (true))
             {
+                rerouteTracksFeeding (*at);
+
                 for (auto f : at->pluginList)
                     if (auto ep = dynamic_cast<ExternalPlugin*> (f))
                         ep->hideWindowForShutdown();

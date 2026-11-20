@@ -232,6 +232,21 @@ namespace
         return true;
     }
 
+    /** In a render of some tracks, a track routed into one that isn't being rendered goes
+        straight to the output on its own, as a track in a submix does without its folder.
+    */
+    bool isRenderedOnItsOwn (Track& t, const CreateNodeParams& params)
+    {
+        if (! params.forRendering || params.allowedTracks == nullptr || t.isPartOfSubmix())
+            return false;
+
+        if (auto output = getTrackOutput (t))
+            if (auto dest = output->getDestinationTrack())
+                return ! params.allowedTracks->contains (dest);
+
+        return false;
+    }
+
     juce::Array<Track*> addImplicitSubmixChildTracks (const juce::Array<Track*> originalTracks)
     {
         if (originalTracks.isEmpty())
@@ -1744,8 +1759,9 @@ std::unique_ptr<tracktion::graph::Node> createNodeForAudioTrack (AudioTrack& at,
             sumNode->addInput (std::move (node));
 
         for (auto inputTrack : inputTracks)
-            if (auto n = createNodeForTrack (*inputTrack, params))
-                sumNode->addInput (std::move (n));
+            if (! isRenderedOnItsOwn (*inputTrack, params))
+                if (auto n = createNodeForTrack (*inputTrack, params))
+                    sumNode->addInput (std::move (n));
 
         node = std::move (sumNode);
     }
@@ -2287,7 +2303,7 @@ std::unique_ptr<tracktion::graph::Node> createNodeForEdit (Edit& edit, const Cre
         // Skip submix children (they're built by their parent) and tracks with no TrackOutput
         if (auto output = getTrackOutput (*t))
         {
-            if (output->getDestinationTrack() != nullptr)
+            if (output->getDestinationTrack() != nullptr && ! isRenderedOnItsOwn (*t, params))
                 continue;
         }
         else

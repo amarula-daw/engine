@@ -97,6 +97,7 @@ private:
     juce::CachedValue<juce::String> outputDevice;
     EditItemID destTrackID;
 
+    void setDestinationTrackID (EditItemID);
     void valueTreePropertyChanged (juce::ValueTree&, const juce::Identifier&) override;
     void valueTreeChildAdded (juce::ValueTree&, juce::ValueTree&) override {}
     void valueTreeChildRemoved (juce::ValueTree&, juce::ValueTree&, int) override {}

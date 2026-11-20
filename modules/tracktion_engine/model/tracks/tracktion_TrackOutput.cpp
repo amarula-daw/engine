@@ -57,9 +57,13 @@ void TrackOutput::updateOutput()
     {
         auto trackNum = outputDevice.get().upToFirstOccurrenceOf ("(", false, false).trim().getTrailingIntValue();
 
+        // The track's ID, where it was stored, still finds it after tracks move
+        auto storedID = EditItemID::fromProperty (state.getChildWithName (IDs::DEVICE), IDs::targetID);
+        auto storedTrack = storedID.isValid() ? findAudioTrackForID (owner.edit, storedID) : nullptr;
+
         for (auto at : getAudioTracks (owner.edit))
         {
-            if (at->getAudioTrackNumber() == trackNum)
+            if (storedTrack != nullptr ? at == storedTrack : at->getAudioTrackNumber() == trackNum)
             {
                 if (! at->getOutput().feedsInto (&owner))  // check for recursion
                     destTrackID = at->itemID;
@@ -221,7 +225,19 @@ juce::String TrackOutput::getDescriptiveOutputName() const
 
 void TrackOutput::setOutputToDeviceID (const juce::String& deviceID)
 {
+    setDestinationTrackID ({});
     outputDevice = deviceID;
+}
+
+void TrackOutput::setDestinationTrackID (EditItemID trackID)
+{
+    auto device = state.getChildWithName (IDs::DEVICE);
+    auto um = &owner.edit.getUndoManager();
+
+    if (trackID.isValid())
+        device.setProperty (IDs::targetID, trackID.toString(), um);
+    else
+        device.removeProperty (IDs::targetID, um);
 }
 
 bool TrackOutput::canPlayAudio() const
@@ -250,18 +266,21 @@ bool TrackOutput::canPlayMidi() const
 
 void TrackOutput::setOutputToTrack (AudioTrack* track)
 {
+    setDestinationTrackID (track != nullptr ? track->itemID : EditItemID());
     outputDevice = track != nullptr ? juce::String ("track") + " " + juce::String (track->getAudioTrackNumber())
                                     : juce::String();
 }
 
 void TrackOutput::setOutputToDefaultDevice (bool isMidi)
 {
+    setDestinationTrackID ({});
     outputDevice = isMidi ? DeviceManager::getDefaultMidiOutDeviceName (false)
                           : DeviceManager::getDefaultAudioOutDeviceName (false);
 }
 
 void TrackOutput::setOutputToNone()
 {
+    setDestinationTrackID ({});
     outputDevice = "(none)";
 }
 
@@ -342,7 +361,7 @@ bool TrackOutput::injectLiveMidiMessage (const juce::MidiMessage& message)
 
 void TrackOutput::valueTreePropertyChanged (juce::ValueTree& v, const juce::Identifier& ident)
 {
-    if (v.hasType (IDs::DEVICE) && ident == IDs::name)
+    if (v.hasType (IDs::DEVICE) && (ident == IDs::name || ident == IDs::targetID))
     {
         outputDevice.forceUpdateOfCachedValue();
         updateOutput();
