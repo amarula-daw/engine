@@ -824,6 +824,13 @@ public:
             return {};
         }
 
+        // A looped take's file holds every pass, so it's at least as long as the time recorded
+        if (isLooping && recordedFileLength + 0.1s < recordedRange.getLength())
+            TRACKTION_LOG ("Recording: " + recordedFile.getFile().getFileName() + " reads as "
+                           + juce::String (recordedFileLength.inSeconds(), 3) + " s ("
+                           + juce::String (recordedFile.getFile().getSize()) + " bytes), but "
+                           + juce::String (recordedRange.getLength().inSeconds(), 3) + " s were recorded");
+
         auto newClipLen = std::min (recordedFileLength,
                                     recordedRange.getLength());
 
@@ -2019,6 +2026,11 @@ void WaveInputRecordingThread::waitForWriterToFinish (AudioFileWriter& writer)
 
         Thread::sleep (2);
     }
+
+    std::scoped_lock lock (queue->processingMutex);
+
+    if (queue->isWriterInQueue (writer))
+        TRACKTION_LOG ("Recording: the recording thread stopped with blocks still to write to " + writer.file.getFile().getFileName());
 }
 
 void WaveInputRecordingThread::run()
