@@ -766,21 +766,30 @@ public:
 
         rc->closeFileWriter();
 
-        // If we didn't get as far as adding any samples, delete the header of the file that will have been written
-        if (rc->punchTimes.getStart() >= context.getUnloopedPosition())
+        // If we didn't get as far as adding any samples, delete the header of the file that will have been written.
+        // This compares with the time recording ended, taken before the playhead stopped: a stopped playhead
+        // reports its position inside the loop, which can be before a looped take's start.
+        if (rc->punchTimes.getStart() >= unloopedEndTime)
         {
+            TRACKTION_LOG ("Recording: no take on " + rc->file.getFileName() + ", as it ended before its punch-in");
             rc->file.deleteFile();
             return {};
         }
 
         if (! rc->file.existsAsFile() || rc->file.getSize() == 0)
+        {
+            TRACKTION_LOG ("Recording: no take on " + rc->file.getFileName() + ", as its file is missing or empty");
             return {};
+        }
 
         const AudioFile recordedFile (edit.engine, rc->file);
         auto clipOwner = findClipOwnerForID (edit, rc->targetID);
 
         if (discardRecordings || ! clipOwner)
         {
+            if (! discardRecordings)
+                TRACKTION_LOG ("Recording: no take on " + rc->file.getFileName() + ", as its track is gone");
+
             recordedFile.deleteFile();
             return {};
         }
@@ -808,7 +817,12 @@ public:
         auto recordedFileLength = TimeDuration::fromSeconds (recordedFile.getLength());
 
         if (recordedFileLength <= 1ms)
+        {
+            TRACKTION_LOG ("Recording: no take on " + recordedFile.getFile().getFileName() + ", as its file reads as "
+                           + juce::String (recordedFileLength.inSeconds(), 4) + " s long ("
+                           + juce::String (recordedFile.getFile().getSize()) + " bytes)");
             return {};
+        }
 
         auto newClipLen = std::min (recordedFileLength,
                                     recordedRange.getLength());
